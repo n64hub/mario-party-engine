@@ -32,6 +32,14 @@
 // loaded with the row and the column past it: the tile's own row, or the first row of the tile below, and the first
 // texels of each row of the tile to the right, loaded into the TMEM line's columns past the part's 64.
 //
+// A map that reaches no further than 4:3's sides (a board's opening scene, where the order of play is decided, is one
+// of 320x240) leaves black at the window's sides, as the game has nothing beside it to draw. The picture is 4:3 then,
+// and what else a wider picture draws out to the window's edges keeps to 4:3 with it, rather than over the black: a
+// camera's view (camera_view.c) and the board's HUD (src/hud.cpp, told through the native recomp_hud_4x3). It is 4:3
+// for a frame whose background says so, from the map's whole width and not the tiles loaded, so that a board whose
+// tiles past 4:3 are still on their way stays wide, and until a frame after the last such background, so that a
+// screen without one (a minigame) is drawn as wide as the window.
+//
 // RT64 reads extended commands only after a gEXEnable in the same display list (it forgets it at each list's start).
 
 #define SCREEN_W 320
@@ -49,9 +57,13 @@
 #define PART_ROWS 24
 #define LINE_WORDS (68 * 2 / 8)
 #define RIGHT_COLUMNS 4
+// How far a map may reach past 4:3's sides, in the screen's pixels, and still leave its picture 4:3.
+#define EDGE 0.5f
 
 void guOrtho(Mtx* m, f32 l, f32 r, f32 b, f32 t, f32 n, f32 f, f32 scale);
 void guMtxF2L(float mf[4][4], Mtx* m);
+// src/hud.cpp's: whether the frame's picture is 4:3.
+void recomp_hud_4x3(s32 picture_4x3);
 
 // A list is drawn while the frames after it are built, so there are more of them than the game's frames in flight.
 static Gfx lists[LISTS][BOARD_BACK_COMMANDS];
@@ -65,6 +77,29 @@ static Vp viewport = { { { SCREEN_W * 2, SCREEN_H * 2, G_MAXZ / 2, 0 }, { SCREEN
 // The view the frame before drew at, to tell a cut from a pan.
 static f32 last_left, last_top, last_scale;
 static s32 last_mirrored;
+// The process scheduler's frames, the last one a background said the picture is 4:3 in, and what src/hud.cpp was told.
+static s32 frame;
+static s32 frame_4x3 = -2;
+static s32 told_4x3;
+
+s32 board_back_4x3(void) {
+    return frame - frame_4x3 <= 1;
+}
+
+// src/hud.cpp told of a change.
+static void tell_4x3(void) {
+    s32 picture_4x3 = board_back_4x3();
+
+    if (picture_4x3 != told_4x3) {
+        told_4x3 = picture_4x3;
+        recomp_hud_4x3(picture_4x3);
+    }
+}
+
+void board_back_frame(void) {
+    frame++;
+    tell_4x3();
+}
 
 Gfx** board_back_begin(Gfx** game_gfx) {
     list = lists[list_index];
@@ -90,9 +125,10 @@ Gfx** board_back_begin(Gfx** game_gfx) {
     return &list;
 }
 
-void board_back_view(Gfx** gfx, f32 left, f32 top, f32 scale, s32 mirrored) {
+void board_back_view(Gfx** gfx, f32 left, f32 top, f32 scale, s32 mirrored, s32 map_width) {
     Mtx* scroll = &scrolls[list_index];
     f32 m[4][4];
+    f32 map_left, map_right;
     s32 i, j;
 
     if (projection.m[0][0] == 0) {
@@ -124,6 +160,21 @@ void board_back_view(Gfx** gfx, f32 left, f32 top, f32 scale, s32 mirrored) {
     m[3][1] = -scale * top;
     m[3][3] = 1;
     guMtxF2L(m, scroll);
+
+    // The map's sides on the screen.
+    map_left = m[3][0];
+    map_right = m[0][0] * map_width + m[3][0];
+    if (map_left > map_right) {
+        f32 swap = map_left;
+        map_left = map_right;
+        map_right = swap;
+    }
+    if ((map_width > 0) && (map_left >= -EDGE) && (map_right <= SCREEN_W + EDGE)) {
+        frame_4x3 = frame;
+    } else {
+        frame_4x3 = frame - 2;
+    }
+    tell_4x3();
     // A zoom as the game animates one is a pan's few percent a frame.
     if ((mirrored == last_mirrored) && (scale <= last_scale * 1.25f) && (last_scale <= scale * 1.25f) &&
         (left - last_left <= CUT_X) && (last_left - left <= CUT_X) && (top - last_top <= CUT_Y) &&

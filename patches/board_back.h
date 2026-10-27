@@ -7,7 +7,7 @@
 //
 //     gfx = board_back_begin(&game_gfx);           its own list, black behind it, a scissor to the window's edges
 //     ...the game's own modes and combiner...
-//     board_back_view(gfx, left, top, scale, mirrored);
+//     board_back_view(gfx, left, top, scale, mirrored, map_width);
 //     ...for each tile: board_back_tile (or the game's texture load, then board_back_quad)...
 //     board_back_end(gfx);
 
@@ -17,12 +17,19 @@
 
 Gfx** board_back_begin(Gfx** game_gfx);
 // The map's (left, top) at the picture's left edge (or its right edge, mirrored), the map drawn at scale times its size.
-void board_back_view(Gfx** gfx, f32 left, f32 top, f32 scale, s32 mirrored);
+// map_width is the whole map's width in its pixels, the tiles not loaded yet included.
+void board_back_view(Gfx** gfx, f32 left, f32 top, f32 scale, s32 mirrored, s32 map_width);
 // A 64x48 tile of 16-bit RGBA texels at (x, y) on the map, and the tiles to its right, below it and below and to its
 // right on the map (NULL where there is none), whose edge texels it is filtered with.
 void board_back_tile(Gfx** gfx, s32 x, s32 y, void* tile, void* right, void* below, void* below_right);
 // A width x height texture at (x, y) on the map, from its texel (s, t), from the texture the game loaded last.
 void board_back_quad(Gfx** gfx, s32 x, s32 y, s32 width, s32 height, s32 s, s32 t);
 void board_back_end(Gfx** gfx);
+
+// Whether the frame's picture is 4:3: its background a map that reaches no further than 4:3's sides, as a board's
+// opening scene's does, so the window's sides are black. The camera's view and the board's HUD stay inside 4:3 then.
+s32 board_back_4x3(void);
+// A new frame, from the process scheduler, once a frame: a picture is 4:3 only while a background says so.
+void board_back_frame(void);
 
 #endif

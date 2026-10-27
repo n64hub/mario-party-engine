@@ -21,7 +21,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   its viewport into its projection, so the 3D widens without stretching and pans with the board at the display's rate.
   A game's patches of the two functions that start a camera's view call it.
 - `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
-  places on the map, kept to the picture's aspect and moved by an interpolated scroll.
+  places on the map, kept to the picture's aspect and moved by an interpolated scroll. A map no wider than 4:3 (a
+  board's opening scene) keeps black at the window's sides, and the camera's view and the HUD stay inside 4:3 with it.
 - `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, through
   hooks in the sprite manager, whose code is the decompilations' asm.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
@@ -56,8 +57,8 @@ Anything else the games share comes here when a change needs it in more than one
 
   `HuPrcCall`, `HuPrcSleep`, `HuPrcTerminate`, `HuPrcCurrentGet`, `Process` and its fields, and the `EXEC_PROCESS_*`
   values have the same names in every game.
-- The game's `patches/syms.ld` has the natives (`docs/processes.md`), and its `patches/survey.c` a
-  `survey_tick`, which the scheduler calls once a frame.
+- The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_4x3`), and its
+  `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
 - The game's `us.toml` hooks the sprite manager and its board's panels for `src/hud.cpp`, and the wipe module for
   `src/wipe.cpp` (their headers say which functions).
 

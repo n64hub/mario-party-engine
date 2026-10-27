@@ -23,6 +23,8 @@ void recomp_prc_exit(void);
 void recomp_prc_reset(process_func end);
 // The game's survey (its patches/survey.c).
 void survey_tick(void);
+// board_back.c's.
+void board_back_frame(void);
 
 // What a process's setjmp-then-longjmp to the scheduler was: back to the scheduler until it resumes this process,
 // then on into PRC_END if the process was killed meanwhile.
@@ -75,8 +77,9 @@ RECOMP_PATCH void HuPrcCall(s32 time) {
     Process* cur_proc_local;
     s32 ret;
 
-    // @recomp A script's survey (the game's patches/survey.c).
+    // @recomp A script's survey (the game's patches/survey.c), and a new frame for a board's background (board_back.c).
     survey_tick();
+    board_back_frame();
 
     PRC_CURRENT = PRC_TOP;
     // @recomp setjmp(&process_jmp_buf), which returns 0 here and what the process longjmped with after each one.

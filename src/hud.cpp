@@ -15,6 +15,9 @@
 //   aligned to the window's edges (gEXSetScissorAlign, then a scissor of the whole screen): the sprite pass's and a
 //   sprite's own scissors stop at 4:3's edges, which would cut off a panel moved out past them. After the sprite,
 //   both go back to RT64's own and the scissor to the whole screen, the sprite pass's.
+// - recomp_hud_4x3, from the engine's patches/board_back.c, whether the picture is 4:3: a board's opening scene's map
+//   is no wider than 4:3, with black at the window's sides, and the panels stay where the game puts them, inside 4:3
+//   with the scene, rather than out over the black.
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list, so each start sends one.
 
@@ -38,6 +41,8 @@ namespace {
     Panel panels[PANELS];
     // The alignment the sprite being drawn started, G_EX_ORIGIN_NONE for none.
     uint16_t sprite_origin = G_EX_ORIGIN_NONE;
+    // Whether the picture is 4:3.
+    bool picture_4x3 = false;
 
     // Which panel's group has this sprite as a member, -1 for none.
     int panel_of(uint8_t* rdram, gpr sprite) {
@@ -92,8 +97,13 @@ extern "C" void mp_hud_reset(uint8_t* rdram) {
     }
 }
 
+// recomp_hud_4x3(picture_4x3), a native the patches call.
+extern "C" void recomp_hud_4x3(uint8_t* rdram, recomp_context* ctx) {
+    picture_4x3 = (int32_t)ctx->r4 != 0;
+}
+
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
-    int panel = panel_of(rdram, sprite);
+    int panel = picture_4x3 ? -1 : panel_of(rdram, sprite);
     sprite_origin = (panel < 0) ? G_EX_ORIGIN_NONE : panels[panel].origin;
     if (sprite_origin == G_EX_ORIGIN_NONE) {
         return;
