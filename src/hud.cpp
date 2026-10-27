@@ -18,23 +18,16 @@
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list, so each start sends one.
 
-#include <cstdint>
+#include "display_list.h"
 
-#include "recomp.h"
-
-#define F3DEX_GBI_2
-#include "rt64_extended_gbi.h"
+using namespace mp_display_list;
 
 namespace {
-    constexpr int32_t SCREEN_W = 320;
-    constexpr int32_t SCREEN_H = 240;
     constexpr int PANELS = 4;
     // A panel is as wide as about a third of the screen: its place (its left edge) plus half that is its middle.
     constexpr int32_t PANEL_HALF = SCREEN_W / 6;
     // A sprite group's count of members, a u16, in every game.
     constexpr int GROUP_COUNT = 0x0A;
-    // gDPSetScissor.
-    constexpr uint32_t G_SETSCISSOR = 0xED;
 
     struct Panel {
         gpr group;
@@ -45,23 +38,6 @@ namespace {
     Panel panels[PANELS];
     // The alignment the sprite being drawn started, G_EX_ORIGIN_NONE for none.
     uint16_t sprite_origin = G_EX_ORIGIN_NONE;
-
-    // Writes commands at *gfx, the display list's next command, and moves it past them.
-    void emit(uint8_t* rdram, gpr gfx, const GfxCommand* commands, int count) {
-        gpr at = (int32_t)MEM_W(0, gfx);
-        for (int i = 0; i < count; i++) {
-            MEM_W(0, at) = commands[i].values.word0;
-            MEM_W(4, at) = commands[i].values.word1;
-            at += 8;
-        }
-        MEM_W(0, gfx) = (int32_t)at;
-    }
-
-    // gDPSetScissor of the whole screen.
-    void whole_screen(GfxCommand* command) {
-        command->values.word0 = (G_SETSCISSOR << 24);
-        command->values.word1 = ((SCREEN_W * 4) << 12) | (SCREEN_H * 4);
-    }
 
     // Which panel's group has this sprite as a member, -1 for none.
     int panel_of(uint8_t* rdram, gpr sprite) {
@@ -128,8 +104,7 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     GfxCommand commands[7];
     gEXEnable(&commands[0]);
     gEXSetRectAlign(&commands[1], sprite_origin, sprite_origin, offset, 0, offset, 0);
-    gEXSetScissorAlign(&commands[3], G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, 0, 0, -SCREEN_W, 0, 0, 0, SCREEN_W,
-                       SCREEN_H);
+    scissor_to_window(&commands[3]);
     whole_screen(&commands[6]);
     emit(rdram, gfx, commands, 7);
 }
@@ -143,8 +118,7 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     GfxCommand commands[7];
     gEXEnable(&commands[0]);
     gEXSetRectAlign(&commands[1], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
-    // RT64's own has no bounds; these are the furthest the command holds.
-    gEXSetScissorAlign(&commands[3], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0, 0, 0, 0x3FFF, 0x3FFF);
+    scissor_own(&commands[3]);
     whole_screen(&commands[6]);
     emit(rdram, gfx, commands, 7);
 }
