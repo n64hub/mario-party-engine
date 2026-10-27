@@ -17,6 +17,11 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
 
 - `src/process_threads.cpp` and `patches/process.c`: the engine's process scheduler on native threads, one per live
   process, run one at a time, on the desktop and in a browser alike ([docs/processes.md](docs/processes.md)).
+- `patches/camera_view.c`: a camera's view past 4:3, its scissor to the window's edges and a board's pan moved from
+  its viewport into its projection, so the 3D widens without stretching and pans with the board at the display's rate.
+  A game's patches of the two functions that start a camera's view call it.
+- `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
+  places on the map, kept to the picture's aspect and moved by an interpolated scroll.
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
@@ -26,7 +31,8 @@ Anything else the games share comes here when a change needs it in more than one
 
 - `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp` into the game.
 - `patches/Makefile` compiles `lib/mario-party-engine/patches/*.c` with the game's own patches, against the game's
-  decompilation's headers and its `patches/patches.h`.
+  decompilation's headers, its `patches/patches.h` and RT64's `include/` (the extended GBI the camera and background
+  draw with).
 - The game's `patches/engine_names.h` includes the decompilation's headers the patches need, declares what they leave
   out, and names what the engine's patches use:
 
