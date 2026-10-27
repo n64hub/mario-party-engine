@@ -28,6 +28,9 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm.
   `src/display_list.h` is what it and `src/hud.cpp` write into a game's display list with.
+- `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
+  patch that has to know how far past 4:3 the window shows (Mario Party's board camera, kept where the wider picture
+  stays on the map).
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
@@ -36,7 +39,7 @@ Anything else the games share comes here when a change needs it in more than one
 ## How a game uses it
 
 - `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp` and `src/wipe.cpp` into
-  the game, with RT64's `include/` on its path.
+  the game, with RT64's `include/` on its path, and `src/aspect_ratio.cpp` if its patches call `mp_aspect_ratio`.
 - `patches/Makefile` compiles `lib/mario-party-engine/patches/*.c` with the game's own patches, against the game's
   decompilation's headers, its `patches/patches.h` and RT64's `include/` (the extended GBI the camera and background
   draw with).
