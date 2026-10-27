@@ -22,6 +22,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   A game's patches of the two functions that start a camera's view call it.
 - `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
   places on the map, kept to the picture's aspect and moved by an interpolated scroll.
+- `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, through
+  hooks in the sprite manager, whose code is the decompilations' asm.
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
@@ -29,7 +31,8 @@ Anything else the games share comes here when a change needs it in more than one
 
 ## How a game uses it
 
-- `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp` into the game.
+- `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp` and `src/hud.cpp` into the game, with
+  RT64's `include/` on its path.
 - `patches/Makefile` compiles `lib/mario-party-engine/patches/*.c` with the game's own patches, against the game's
   decompilation's headers, its `patches/patches.h` and RT64's `include/` (the extended GBI the camera and background
   draw with).
@@ -52,6 +55,7 @@ Anything else the games share comes here when a change needs it in more than one
   values have the same names in every game.
 - The game's `patches/syms.ld` has the natives (`docs/processes.md`), and its `patches/survey.c` a
   `survey_tick`, which the scheduler calls once a frame.
+- The game's `us.toml` hooks the sprite manager and its board's panels for `src/hud.cpp` (its header says which functions).
 
 ## Changing it
 
