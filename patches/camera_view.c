@@ -9,8 +9,13 @@
 //   of 4:3's edges as far in from the window's, so a board, whose camera keeps the console's overscan border (16, 12,
 //   304, 228), drew in a box with black at its sides. A camera whose scissor is the whole screen or that border is
 //   drawn to the window's edges (gEXSetScissor, from the left and right): from top to bottom for the border, and
-//   between the game's own top and bottom while it animates them, as a board's wipe between turns closes it to a band
-//   across the middle. A screen split between players (a minigame's halves and quarters) keeps the game's.
+//   between the game's own top and bottom while it animates them, as Mario Party 2's board wipe between turns closes it
+//   to a band across the middle. Mario Party 3's wipes it sideways instead, 32 pixels a frame: the left edge goes
+//   across to close it, then the right edge to open it again after the camera cuts to the next player. A scissor on
+//   those steps with one edge at the border's is widened too, each edge as far across the window as across the border
+//   (an origin of that fraction of the window's width), so its 3D keeps its projection and the wipe crosses the window
+//   as it crosses the console's screen. A screen split between players (a minigame's halves and quarters, at 160)
+//   keeps the game's.
 // - The viewport. A board pans its 3D by moving its camera's viewport, as large as the map, by as much as it scrolls
 //   the background, and RT64 widens a viewport about the screen's middle: what the viewport moved by was widened too,
 //   so a pan moved the board's spaces and characters a third further than the board under them, and a viewport is
@@ -31,6 +36,8 @@
 #define BORDER_TOP 12
 #define BORDER_RIGHT 304
 #define BORDER_BOTTOM 228
+// The step of a sideways wipe's edge across the border, from one edge to the other in 9.
+#define WIPE_STEP 32
 // The projections and viewports of the widened cameras, more than the frames in flight use.
 #define SHIFTED 16
 // The cameras whose last viewport is kept, to tell a cut from a pan.
@@ -66,18 +73,41 @@ static s32 cut(s32 camera, Vp* viewport) {
     return jumped;
 }
 
+// Whether an edge is on a sideways wipe's steps across the border.
+static s32 wipe_step(s32 x) {
+    return (x >= BORDER_LEFT) && (x <= BORDER_RIGHT) && (((x - BORDER_LEFT) % WIPE_STEP) == 0);
+}
+
+// Whether the scissor is the border, or the border in a sideways wipe: one edge at the border's, the other on its steps.
+static s32 border_wipe(s32 left, s32 right) {
+    return wipe_step(left) && wipe_step(right) && (left <= right) && ((left == BORDER_LEFT) || (right == BORDER_RIGHT));
+}
+
+// An edge across the border as the origin as far across the window.
+static u16 border_origin(s32 x) {
+    return (u16)(((x - BORDER_LEFT) * G_EX_ORIGIN_RIGHT) / (BORDER_RIGHT - BORDER_LEFT));
+}
+
 s32 camera_view_widened(s32 left, s32 right) {
-    return ((left == 0) && (right == SCREEN_W)) || ((left == BORDER_LEFT) && (right == BORDER_RIGHT));
+    return ((left == 0) && (right == SCREEN_W)) || border_wipe(left, right);
 }
 
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
-    if (camera_view_widened(left, right)) {
+    u16 left_origin = G_EX_ORIGIN_LEFT;
+    u16 right_origin = G_EX_ORIGIN_RIGHT;
+
+    // A closed wipe draws nothing, as the game's own scissor does.
+    if (camera_view_widened(left, right) && (left < right)) {
         if ((top == BORDER_TOP) && (bottom == BORDER_BOTTOM)) {
             top = 0;
             bottom = SCREEN_H;
         }
+        if (left != 0) {
+            left_origin = border_origin(left);
+            right_origin = border_origin(right);
+        }
         gEXEnable((*gfx)++);
-        gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, 0, top, 0, bottom);
+        gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, 0, top, 0, bottom);
         return;
     }
 
