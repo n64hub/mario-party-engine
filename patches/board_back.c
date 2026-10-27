@@ -19,7 +19,18 @@
 //   at the display's rate by interpolating matrices, and never moves a rectangle, so drawn as rectangles the board
 //   stood still between its frames while the 3D spaces on it moved, and slid under them in a pan: the scroll's matrix
 //   is interpolated as the 3D camera is, unless the scroll jumped (a cut, not a pan).
-// - board_back_quad: a tile, or part of one, as a textured quad at its place on the map.
+// - board_back_tile: a 64x48 tile at its place on the map, with the texels past its right and bottom edges that its
+//   neighbours on the map hold, so that a filtered tile meets them without a seam (below).
+// - board_back_quad: a texture the game loaded, as a textured quad at its place on the map.
+//
+// A tile is 6 KB of 16-bit texels, more than TMEM's 4 KB, so it is loaded in two parts. Bilinear filtering (Mario
+// Party 2's and 3's backgrounds; Mario Party 1 draws its tiles point-sampled) blends the texel at a coordinate with the
+// one past it, and at a part's last texel row or column the one past it isn't in TMEM, so the game's own loads, a part
+// alone, clamped or mirrored, drew the last texel flat and then the next part's first texel in a hard step. At a
+// console's 320x240 that is a row of pixels; at a high resolution it is a straight line along every part's and tile's
+// edge across a smoothly filtered picture, the more visible as the board's zoom or the camera moves it. So each part is
+// loaded with the row and the column past it: the tile's own row, or the first row of the tile below, and the first
+// texels of each row of the tile to the right, loaded into the TMEM line's columns past the part's 64.
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list (it forgets it at each list's start).
 
@@ -30,6 +41,14 @@
 #define CUT_Y 48
 #define LISTS 8
 #define SCROLL_GROUP 0x4D504247
+#define TILE_WIDTH 64
+#define TILE_HEIGHT 48
+// A part's rows, and in TMEM a line of a part's 64 texels and the one past them, rounded up to TMEM's 64-bit words:
+// 25 lines of 68 texels, 3400 of its 4096 bytes. A loaded row past the part lands on an even line (24), as the line
+// it is loaded from does, so the way TMEM swaps the words of odd lines agrees.
+#define PART_ROWS 24
+#define LINE_WORDS (68 * 2 / 8)
+#define RIGHT_COLUMNS 4
 
 void guOrtho(Mtx* m, f32 l, f32 r, f32 b, f32 t, f32 n, f32 f, f32 scale);
 void guMtxF2L(float mf[4][4], Mtx* m);
@@ -146,6 +165,45 @@ void board_back_quad(Gfx** gfx, s32 x, s32 y, s32 width, s32 height, s32 s, s32 
     corner(&v[3], x, y + height, s, t + height);
     gSPVertex((*gfx)++, v, 4, 0);
     gSP2Triangles((*gfx)++, 0, 1, 2, 0, 0, 2, 3, 0);
+}
+
+// rows rows of a 64-texel-wide image from its row from, columns 0 to last_column, into TMEM from line line, column column.
+static void load(Gfx** gfx, void* image, s32 from, s32 rows, s32 last_column, s32 line, s32 column) {
+    gDPSetTextureImage((*gfx)++, G_IM_FMT_RGBA, G_IM_SIZ_16b, TILE_WIDTH, image);
+    gDPSetTile((*gfx)++, G_IM_FMT_RGBA, G_IM_SIZ_16b, LINE_WORDS, line * LINE_WORDS + column * 2 / 8, G_TX_LOADTILE, 0,
+               G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOLOD);
+    gDPLoadSync((*gfx)++);
+    gDPLoadTile((*gfx)++, G_TX_LOADTILE, 0, from << G_TEXTURE_IMAGE_FRAC, last_column << G_TEXTURE_IMAGE_FRAC,
+                (from + rows - 1) << G_TEXTURE_IMAGE_FRAC);
+}
+
+void board_back_tile(Gfx** gfx, s32 x, s32 y, void* tile, void* right, void* below, void* below_right) {
+    s32 part, top, rows;
+
+    for (part = 0; part < 2; part++) {
+        top = part * PART_ROWS;
+        // The part's rows and the one past them: the tile's own, or the first of the tile below's.
+        rows = (top + PART_ROWS < TILE_HEIGHT) ? (PART_ROWS + 1) : (TILE_HEIGHT - top);
+        load(gfx, tile, top, rows, TILE_WIDTH - 1, 0, 0);
+        if ((rows <= PART_ROWS) && (below != NULL)) {
+            load(gfx, below, 0, 1, TILE_WIDTH - 1, PART_ROWS, 0);
+        }
+        if (right != NULL) {
+            load(gfx, right, top, rows, RIGHT_COLUMNS - 1, 0, TILE_WIDTH);
+            if (rows <= PART_ROWS) {
+                // The corner: the tile below's right neighbour's, or the right one's last row if there is none.
+                load(gfx, (below_right != NULL) ? below_right : right, (below_right != NULL) ? 0 : TILE_HEIGHT - 1, 1,
+                     RIGHT_COLUMNS - 1, PART_ROWS, TILE_WIDTH);
+            }
+        }
+        gDPPipeSync((*gfx)++);
+        gDPSetTile((*gfx)++, G_IM_FMT_RGBA, G_IM_SIZ_16b, LINE_WORDS, 0, G_TX_RENDERTILE, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                   G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOLOD);
+        // Clamped to the texels loaded: a tile at the map's edge, or the grid's, ends on its own last row or column.
+        gDPSetTileSize((*gfx)++, G_TX_RENDERTILE, 0, 0, (TILE_WIDTH - (right == NULL)) << G_TEXTURE_IMAGE_FRAC,
+                       (PART_ROWS - ((rows <= PART_ROWS) && (below == NULL))) << G_TEXTURE_IMAGE_FRAC);
+        board_back_quad(gfx, x, y + top, TILE_WIDTH, PART_ROWS, 0, 0);
+    }
 }
 
 void board_back_end(Gfx** gfx) {
