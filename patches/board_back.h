@@ -5,6 +5,7 @@
 // A game's patch of the function that draws the background's tiles picks the tiles under a picture wider than 4:3 and
 // draws them through these, in this order:
 //
+//     board_back_area(left, top, scale, mirrored, side, area);   the map to pick the tiles of
 //     gfx = board_back_begin(&game_gfx);           its own list, black behind it, a scissor to the window's edges
 //     ...the game's own modes and combiner...
 //     board_back_view(gfx, left, top, scale, mirrored, map_width);
@@ -15,6 +16,10 @@
 #define BOARD_BACK_COMMANDS 8192
 #define BOARD_BACK_CORNERS 2048
 
+// The map (x0, y0, x1, y1) under a picture side pixels wider than 320 on each side, at this view (board_back_view's)
+// and every view RT64 draws between the last frame's and it, unless the view jumped (a cut). Before board_back_view,
+// which makes this view the last.
+void board_back_area(f32 left, f32 top, f32 scale, s32 mirrored, f32 side, f32 area[4]);
 Gfx** board_back_begin(Gfx** game_gfx);
 // The map's (left, top) at the picture's left edge (or its right edge, mirrored), the map drawn at scale times its size.
 // map_width is the whole map's width in its pixels, the tiles not loaded yet included.

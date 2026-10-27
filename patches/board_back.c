@@ -14,11 +14,17 @@
 //   game gives it for what it draws. A scissor to the window's edges, and black behind the tiles for past the map's own
 //   edges: the game never clears a board's frame (its tiles cover 4:3), so the window's sides would show what an
 //   earlier frame left there.
+// - board_back_area: the part of the map the game's patch picks the tiles of, under the picture at this frame's view and
+//   every view RT64 draws between the last frame's and it.
 // - board_back_view: the 320x240 picture's projection, kept to its aspect (G_EX_ASPECT_ADJUST, so that the window's
-//   sides show more of the map, not a stretched 4:3), and the scroll as a matrix. RT64 draws frames between the game's
-//   at the display's rate by interpolating matrices, and never moves a rectangle, so drawn as rectangles the board
-//   stood still between its frames while the 3D spaces on it moved, and slid under them in a pan: the scroll's matrix
-//   is interpolated as the 3D camera is, unless the scroll jumped (a cut, not a pan).
+//   sides show more of the map, not a stretched 4:3), and the scroll and zoom as a matrix. RT64 draws frames between the
+//   game's at the display's rate by interpolating matrices, and never moves a rectangle, so drawn as rectangles the
+//   board stood still between its frames while the 3D spaces on it moved, and slid under them in a pan: the scroll's
+//   matrix is interpolated as the 3D camera is, unless the view jumped (a cut, not a pan). Its zoom and its move are
+//   interpolated apart (G_EX_INTERPOLATE_DECOMPOSE): a simple group with its rotation skipped takes the new frame's
+//   3x3, the zoom, and lerps only the last row, the move, which is the zoom times the scroll, so a frame halfway through
+//   a zoom drew at the new zoom from a place off the view by half the zoom's change times the scroll, tens of the map's
+//   pixels across a big map, and showed the black past the tiles picked at a window's edge.
 // - board_back_tile: a 64x48 tile at its place on the map, with the texels past its right and bottom edges that its
 //   neighbours on the map hold, so that a filtered tile meets them without a seam (below).
 // - board_back_quad: a texture the game loaded, as a textured quad at its place on the map.
@@ -101,6 +107,38 @@ void board_back_frame(void) {
     tell_4x3();
 }
 
+// Whether RT64 draws frames between the last frame's view and this one, or this is a cut.
+static s32 pans(f32 left, f32 top, f32 scale, s32 mirrored) {
+    // A zoom as the game animates one is a pan's few percent a frame.
+    return (mirrored == last_mirrored) && (scale <= last_scale * 1.25f) && (last_scale <= scale * 1.25f) &&
+           (left - last_left <= CUT_X) && (last_left - left <= CUT_X) && (top - last_top <= CUT_Y) &&
+           (last_top - top <= CUT_Y);
+}
+
+// The map under a view's picture, side pixels past 320 on each side: a screen x is scale * (x - left), or mirrored,
+// scale * (320 - (x - left)).
+static void view_area(f32 left, f32 top, f32 scale, s32 mirrored, f32 side, f32 area[4]) {
+    area[0] = mirrored ? (left + SCREEN_W - (SCREEN_W + side) / scale) : (left - side / scale);
+    area[1] = top;
+    area[2] = area[0] + (SCREEN_W + 2 * side) / scale;
+    area[3] = top + SCREEN_H / scale;
+}
+
+void board_back_area(f32 left, f32 top, f32 scale, s32 mirrored, f32 side, f32 area[4]) {
+    f32 last[4];
+
+    view_area(left, top, scale, mirrored, side, area);
+    // A frame between two draws the map's place at a picture's edge somewhere between the two's, as RT64 moves and
+    // zooms the scroll's matrix by the same part of the way.
+    if (pans(left, top, scale, mirrored)) {
+        view_area(last_left, last_top, last_scale, last_mirrored, side, last);
+        area[0] = (last[0] < area[0]) ? last[0] : area[0];
+        area[1] = (last[1] < area[1]) ? last[1] : area[1];
+        area[2] = (last[2] > area[2]) ? last[2] : area[2];
+        area[3] = (last[3] > area[3]) ? last[3] : area[3];
+    }
+}
+
 Gfx** board_back_begin(Gfx** game_gfx) {
     list = lists[list_index];
     next_corner = corners[list_index];
@@ -175,13 +213,11 @@ void board_back_view(Gfx** gfx, f32 left, f32 top, f32 scale, s32 mirrored, s32 
         frame_4x3 = frame - 2;
     }
     tell_4x3();
-    // A zoom as the game animates one is a pan's few percent a frame.
-    if ((mirrored == last_mirrored) && (scale <= last_scale * 1.25f) && (last_scale <= scale * 1.25f) &&
-        (left - last_left <= CUT_X) && (last_left - left <= CUT_X) && (top - last_top <= CUT_Y) &&
-        (last_top - top <= CUT_Y)) {
-        gEXMatrixGroupSimple((*gfx)++, SCROLL_GROUP, G_EX_PUSH, G_MTX_MODELVIEW, G_EX_COMPONENT_INTERPOLATE,
-                             G_EX_COMPONENT_SKIP, G_EX_COMPONENT_INTERPOLATE, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP,
-                             G_EX_ORDER_LINEAR, G_EX_EDIT_NONE, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP);
+    if (pans(left, top, scale, mirrored)) {
+        gEXMatrixGroupDecomposed((*gfx)++, SCROLL_GROUP, G_EX_PUSH, G_MTX_MODELVIEW, G_EX_COMPONENT_INTERPOLATE,
+                                 G_EX_COMPONENT_SKIP, G_EX_COMPONENT_INTERPOLATE, G_EX_COMPONENT_SKIP,
+                                 G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP, G_EX_ORDER_LINEAR,
+                                 G_EX_EDIT_NONE, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP);
     } else {
         gEXMatrixGroupNoInterpolate((*gfx)++, G_EX_PUSH, G_MTX_MODELVIEW, G_EX_EDIT_NONE);
     }
