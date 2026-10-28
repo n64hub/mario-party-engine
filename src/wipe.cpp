@@ -5,8 +5,10 @@
 // shape wipe (an iris: a circle, a star, a face) draws the shape as a mask texture in a square centred on the screen,
 // then the wipe's colour as up to four fill rectangles around the square: one above and one below it from x 0 to 320,
 // one each side of it. A fade, the held colour after a wipe closes, and a shape wipe's first frame are one fill
-// rectangle of the whole screen. RT64's Aspect Ratio Expand keeps those rectangles inside 4:3, under the game's scissor
-// of the whole screen, so the game's colour never reaches past 4:3. A game's hooks (its us.toml) call these natives:
+// rectangle of the whole screen. RT64's Aspect Ratio Expand keeps those rectangles inside 4:3 where the frame's other
+// draws reach past it (a board's or a minigame's 3D, widened), so the game's colour never reaches past 4:3 there; a
+// rectangle as wide as every scissor of the frame (RT64's framebuffer pair's) it stretches to the window's width
+// instead. A game's hooks (its us.toml) call these natives:
 // - mp_wipe_fill_start and mp_wipe_fill_end around the function that draws the whole-screen rectangle: that rectangle
 //   carried out past the window's edges.
 // - mp_wipe_sides where a shape wipe has set its colour for the rectangles around the square: two more of them, from
@@ -21,7 +23,15 @@
 // what is aligned to the window's left or right edge at its HUD's aspect (the runtime's HUD ratio, 16:9 by default),
 // short of a wider window's edges, and a scissor's alignment (gEXSetScissorAlign) can't reach left of 0.
 //
-// In a 4:3 picture the rectangles cover nothing past the screen. RT64 reads extended commands only after a gEXEnable in
+// A frame whose picture is 4:3 (a board's opening scene, its map no wider than 4:3, with black at the window's sides:
+// patches/board_back.c) keeps its wipes inside 4:3 with it. Its draws keep to the screen's scissor, so RT64 would
+// stretch the whole-screen rectangle across the window: mp_wipe_fill_start sets its aspect to the screen's
+// (G_EX_ASPECT_ADJUST) instead, which puts it on the 4:3 picture where RT64 puts the game's other rectangles
+// (aligned to the screen's centre, its edges would be rounded down to the game's pixels, up to 4 of the window's
+// pixels left of the picture), and mp_wipe_sides adds nothing. Mario Party 3's opening scene fades in from white,
+// and the window's black sides turned grey with it.
+//
+// In a 4:3 window the rectangles cover nothing past the screen. RT64 reads extended commands only after a gEXEnable in
 // the same display list, so each start sends one.
 
 #include "display_list.h"
@@ -54,9 +64,21 @@ namespace {
     void rect_own(GfxCommand* commands) {
         gEXSetRectAlign(commands, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
     }
+
+    // Whether mp_wipe_fill_start pushed a scissor, for mp_wipe_fill_end.
+    bool fill_wide = false;
 }
 
 extern "C" void mp_wipe_fill_start(uint8_t* rdram, gpr gfx) {
+    fill_wide = !picture_is_4x3();
+    if (!fill_wide) {
+        GfxCommand commands[2];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_ADJUST);
+        emit(rdram, gfx, commands, 2);
+        return;
+    }
+
     GfxCommand commands[6];
     gEXEnable(&commands[0]);
     push_wide_scissor(&commands[1]);
@@ -66,6 +88,14 @@ extern "C" void mp_wipe_fill_start(uint8_t* rdram, gpr gfx) {
 }
 
 extern "C" void mp_wipe_fill_end(uint8_t* rdram, gpr gfx) {
+    if (!fill_wide) {
+        GfxCommand command;
+        gEXSetRectAspect(&command, G_EX_ASPECT_AUTO);
+        emit(rdram, gfx, &command, 1);
+        return;
+    }
+    fill_wide = false;
+
     GfxCommand commands[3];
     rect_own(&commands[0]);
     gEXPopScissor(&commands[2]);
@@ -73,6 +103,10 @@ extern "C" void mp_wipe_fill_end(uint8_t* rdram, gpr gfx) {
 }
 
 extern "C" void mp_wipe_sides(uint8_t* rdram, gpr gfx) {
+    if (picture_is_4x3()) {
+        return;
+    }
+
     GfxCommand commands[13];
     gEXEnable(&commands[0]);
     push_wide_scissor(&commands[1]);

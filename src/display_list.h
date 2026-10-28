@@ -18,6 +18,9 @@ namespace mp_display_list {
     // gDPSetScissor.
     constexpr uint32_t G_SETSCISSOR = 0xED;
 
+    // Whether the frame's picture is 4:3, as the engine's patches/board_back.c last told src/hud.cpp.
+    bool picture_is_4x3();
+
     // Writes commands at *gfx, the display list's next command, and moves it past them.
     inline void emit(uint8_t* rdram, gpr gfx, const GfxCommand* commands, int count) {
         gpr at = (int32_t)MEM_W(0, gfx);

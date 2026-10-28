@@ -22,7 +22,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   A game's patches of the two functions that start a camera's view call it.
 - `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
   places on the map, kept to the picture's aspect and moved by an interpolated scroll. A map no wider than 4:3 (a
-  board's opening scene) keeps black at the window's sides, and the camera's view and the HUD stay inside 4:3 with it.
+  board's opening scene) keeps black at the window's sides, and the camera's view, the HUD and a screen wipe stay
+  inside 4:3 with it.
 - `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, through
   hooks in the sprite manager, whose code is the decompilations' asm.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the

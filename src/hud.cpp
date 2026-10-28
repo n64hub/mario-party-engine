@@ -23,7 +23,7 @@
 //   both go back to RT64's own and the scissor to the whole screen, the sprite pass's.
 // - recomp_hud_4x3, from the engine's patches/board_back.c, whether the picture is 4:3: a board's opening scene's map
 //   is no wider than 4:3, with black at the window's sides, and the panels stay where the game puts them, inside 4:3
-//   with the scene, rather than out over the black.
+//   with the scene, rather than out over the black. src/wipe.cpp asks it too (picture_is_4x3).
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list, so each start sends one.
 
@@ -153,6 +153,10 @@ extern "C" void mp_hud_reset(uint8_t* rdram) {
 // recomp_hud_4x3(picture_4x3), a native the patches call.
 extern "C" void recomp_hud_4x3(uint8_t* rdram, recomp_context* ctx) {
     picture_4x3 = (int32_t)ctx->r4 != 0;
+}
+
+bool mp_display_list::picture_is_4x3() {
+    return picture_4x3;
 }
 
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
