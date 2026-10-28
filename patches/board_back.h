@@ -41,8 +41,12 @@ void* board_back_archive(s32 extra, u32 size);
 s32 board_back_own_archive(void* bytes);
 
 // Whether the frame's picture is 4:3: its background a map that reaches no further than 4:3's sides, as a board's
-// opening scene's does, so the window's sides are black. The camera's view and the board's HUD stay inside 4:3 then.
+// opening scene's does, or a scene the game says is drawn at 4:3, so the window's sides are black. The camera's view and
+// the board's HUD stay inside 4:3 then.
 s32 board_back_4x3(void);
+// Whether the scene playing is drawn at 4:3 whatever its background, from a game's patch as each scene starts: its
+// background a 2D picture as large as the screen, or its 3D a stage built only as wide as 4:3, with nothing past it.
+void board_back_scene_4x3(s32 picture_4x3);
 // A new frame, from the process scheduler, once a frame: a picture is 4:3 only while a background says so.
 void board_back_frame(void);
 

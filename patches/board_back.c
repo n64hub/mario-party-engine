@@ -49,7 +49,9 @@
 // camera's view (camera_view.c) and the board's HUD (src/hud.cpp, told through the native recomp_hud_4x3). It is 4:3
 // for a frame whose background says so, from the map's whole width and not the tiles loaded, so that a board whose
 // tiles past 4:3 are still on their way stays wide, and until a frame after the last such background, so that a
-// screen without one (a minigame) is drawn as wide as the window.
+// screen without one (a minigame) is drawn as wide as the window. A scene the game draws at 4:3 whatever its background
+// (board_back_scene_4x3: a 2D picture of 320x240 behind its 3D, or a stage built only as wide as 4:3) is 4:3 as long
+// as it plays.
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list (it forgets it at each list's start).
 
@@ -92,11 +94,17 @@ static s32 last_mirrored;
 static s32 frame;
 static s32 frame_4x3 = -2;
 static s32 told_4x3;
+// Whether the scene playing is drawn at 4:3, as the game last said.
+static s32 scene_4x3;
 // A tile's compressed bytes, for each of a game's slots past its own: no larger than its texels.
 static u8 archives[BOARD_BACK_ARCHIVES][TILE_WIDTH * TILE_HEIGHT * 2] __attribute__((aligned(16)));
 
 s32 board_back_4x3(void) {
-    return frame - frame_4x3 <= 1;
+    return scene_4x3 || (frame - frame_4x3 <= 1);
+}
+
+void board_back_scene_4x3(s32 picture_4x3) {
+    scene_4x3 = picture_4x3;
 }
 
 // src/hud.cpp told of a change.

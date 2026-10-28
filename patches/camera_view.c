@@ -17,8 +17,8 @@
 //   (an origin of that fraction of the window's width), so its 3D keeps its projection and the wipe crosses the window
 //   as it crosses the console's screen. A screen split between players (a minigame's halves and quarters, at 160)
 //   keeps the game's, and so does every camera while the picture is 4:3 (board_back.c: a board's opening scene, whose
-//   map is no wider than 4:3), so that its 3D, the scene's host and the players among them, keeps inside 4:3 with its
-//   background, not out over the black at the window's sides.
+//   map is no wider than 4:3, or a scene the game draws at 4:3), so that its 3D, the scene's host and the players among
+//   them, keeps inside 4:3 with its background, not out over the black at the window's sides.
 // - The viewport. A board pans its 3D by moving its camera's viewport, as large as the map, by as much as it scrolls
 //   the background, and RT64 widens a viewport about the screen's middle: what the viewport moved by was widened too,
 //   so a pan moved the board's spaces and characters a third further than the board under them, and a viewport is

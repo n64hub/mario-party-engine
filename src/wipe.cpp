@@ -44,6 +44,15 @@
 // rectangle into no-ops and draws the whole square instead, aligned to the screen's centre under the wide scissor, its
 // texture where the game's would have it, and the colour only past the square.
 //
+// A 4:3 picture's sides are black whatever its scene draws: mp_wipe_picture_sides, where a game ends the last display
+// list of its frame (after its wipe and its text), given the list's next command, fills the window black from past its
+// left edge to 4:3's and from 4:3's right edge to past its right edge, two fill rectangles of the window's sides alone
+// (RT64 draws a fill rectangle as a clear of its area, which no scissor cuts), and returns the list's next command
+// after them. RT64 widens the 3D of a camera whose scissor is the whole screen, and draws a rectangle that samples a
+// copy of the frame (a framebuffer's tile) across the window, so a scene the game draws at 4:3 drew past 4:3 over the
+// black: Mario Party 2's Crazy Cutters its logs and spiked bars, and Mario Party 3's results on the star stage the
+// stage's 3D.
+//
 // In a 4:3 window the rectangles cover nothing past the screen. RT64 reads extended commands only after a gEXEnable in
 // the same display list, so each start sends one.
 
@@ -59,6 +68,14 @@ namespace {
     constexpr int32_t HALF = SCREEN_W / 2;
     // gbi.h's G_SC_NON_INTERLACE, a scissor's mode.
     constexpr uint32_t NON_INTERLACE = 0;
+    // gbi.h's (F3DEX2's) commands and other modes the black at a 4:3 picture's sides is drawn with.
+    constexpr uint32_t G_RDPPIPESYNC = 0xE7;
+    constexpr uint32_t G_SETOTHERMODE_H = 0xE3;
+    constexpr uint32_t G_SETOTHERMODE_L = 0xE2;
+    constexpr uint32_t G_SETFILLCOLOR = 0xF7;
+    constexpr uint32_t CYCLE_TYPE_SHIFT = 20;
+    constexpr uint32_t CYCLE_FILL = 3u << CYCLE_TYPE_SHIFT;
+    constexpr uint32_t RENDER_MODE_SHIFT = 3;
 
     // gDPFillRectangle from (ulx, 0) to (lrx, 240), x in pixels.
     void fill(GfxCommand* command, int32_t ulx, int32_t lrx) {
@@ -246,4 +263,46 @@ extern "C" void mp_wipe_sides(uint8_t* rdram, gpr gfx) {
 
 extern "C" void mp_wipe_square_sides(uint8_t* rdram, gpr gfx, gpr left, gpr right) {
     sides(rdram, gfx, (int16_t)left, (int16_t)right);
+}
+
+extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
+    if (!picture_is_4x3()) {
+        return at;
+    }
+
+    GfxCommand commands[22];
+    gEXEnable(&commands[0]);
+    commands[1].values.word0 = G_RDPPIPESYNC << 24;
+    commands[1].values.word1 = 0;
+    gEXPushOtherMode(&commands[2]);
+    gEXPushFillColor(&commands[3]);
+    push_wide_scissor(&commands[4]);
+    // Fill mode (gDPSetCycleType), no blending (gDPSetRenderMode), and black of a 16-bit frame (gDPSetFillColor).
+    commands[7].values.word0 = (G_SETOTHERMODE_H << 24) | ((32 - CYCLE_TYPE_SHIFT - 2) << 8) | (2 - 1);
+    commands[7].values.word1 = CYCLE_FILL;
+    commands[8].values.word0 = (G_SETOTHERMODE_L << 24) | ((32 - RENDER_MODE_SHIFT - 29) << 8) | (29 - 1);
+    commands[8].values.word1 = 0;
+    commands[9].values.word0 = G_SETFILLCOLOR << 24;
+    commands[9].values.word1 = 0x00010001;
+    // From WIDE left of 4:3's left edge to it: a fill rectangle reaches 3/4 of a pixel past its right edge (RT64 draws
+    // it as a clear of its own area, under no scissor), taken off here. RT64 rounds an aligned rectangle's edges down
+    // to the game's pixels in the window, which put this one's right edge a pixel short of 4:3: it ends a pixel on.
+    gEXSetRectAlign(&commands[10], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0, (1 - HALF) * 4 - 3, 0);
+    fill(&commands[12], 0, 0);
+    // From 4:3's right edge to WIDE right of it, its left edge a pixel on for the same reason, which put it a pixel
+    // inside 4:3.
+    gEXSetRectAlign(&commands[13], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (1 - HALF) * 4, 0, (WIDE - HALF) * 4, 0);
+    fill(&commands[15], SCREEN_W, SCREEN_W);
+    rect_own(&commands[16]);
+    commands[18].values.word0 = G_RDPPIPESYNC << 24;
+    commands[18].values.word1 = 0;
+    gEXPopScissor(&commands[19]);
+    gEXPopFillColor(&commands[20]);
+    gEXPopOtherMode(&commands[21]);
+    for (const GfxCommand& command : commands) {
+        MEM_W(0, at) = command.values.word0;
+        MEM_W(4, at) = command.values.word1;
+        at += 8;
+    }
+    return at;
 }

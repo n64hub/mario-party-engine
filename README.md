@@ -22,12 +22,13 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   A game's patches of the two functions that start a camera's view call it.
 - `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
   places on the map, kept to the picture's aspect and moved by an interpolated scroll. A map no wider than 4:3 (a
-  board's opening scene) keeps black at the window's sides, and the camera's view, the HUD and a screen wipe stay
-  inside 4:3 with it.
+  board's opening scene), or a scene a game's patch says the game draws at 4:3 (board_back_scene_4x3), keeps black at
+  the window's sides, and the camera's view, the HUD and a screen wipe stay inside 4:3 with it.
 - `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, through
   hooks in the sprite manager, whose code is the decompilations' asm.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
-  window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm.
+  window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. In a 4:3
+  picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there.
   `src/display_list.h` is what it and `src/hud.cpp` write into a game's display list with.
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
@@ -75,8 +76,8 @@ Anything else the games share comes here when a change needs it in more than one
   values have the same names in every game.
 - The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_4x3`), and its
   `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
-- The game's `us.toml` hooks the sprite manager and its board's panels for `src/hud.cpp`, and the wipe module for
-  `src/wipe.cpp` (their headers say which functions).
+- The game's `us.toml` hooks the sprite manager and its board's panels for `src/hud.cpp`, and the wipe module and the
+  end of a frame's last display list for `src/wipe.cpp` (their headers say which functions).
 
 ## Changing it
 
