@@ -31,6 +31,15 @@ void board_back_tile(Gfx** gfx, s32 x, s32 y, void* tile, void* right, void* bel
 void board_back_quad(Gfx** gfx, s32 x, s32 y, s32 width, s32 height, s32 s, s32 t);
 void board_back_end(Gfx** gfx);
 
+// A tile's compressed bytes as they are read and decompressed, for a game's slots past its own (extra counts from 0,
+// fewer than BOARD_BACK_ARCHIVES), in place of the game's heap, which it sized for the tiles under 4:3: a cut or a zoom
+// out needs most of the tiles past 4:3 at once, and held to a few at a time on the heap they came over several frames,
+// with black at the window's side until they had. NULL for bytes larger than a tile's texels, which take the heap.
+#define BOARD_BACK_ARCHIVES 88
+void* board_back_archive(s32 extra, u32 size);
+// Whether a slot's bytes are board_back_archive's, which the game's heap never frees.
+s32 board_back_own_archive(void* bytes);
+
 // Whether the frame's picture is 4:3: its background a map that reaches no further than 4:3's sides, as a board's
 // opening scene's does, so the window's sides are black. The camera's view and the board's HUD stay inside 4:3 then.
 s32 board_back_4x3(void);

@@ -28,6 +28,11 @@
 // - board_back_tile: a 64x48 tile at its place on the map, with the texels past its right and bottom edges that its
 //   neighbours on the map hold, so that a filtered tile meets them without a seam (below).
 // - board_back_quad: a texture the game loaded, as a textured quad at its place on the map.
+// - board_back_archive: where a tile in one of a game's slots past its own is read to and decompressed from, its own
+//   buffer rather than the game's heap, which the game sized for the tiles it draws under 4:3. Held to a few tiles past
+//   4:3 on their way at a time on the heap, the tiles a wider picture needs at once on a cut or a zoom out (most of the
+//   88 past 4:3 when the board's camera zooms out from a close-up, as Mario Party 2's does from Pirate Land's ship)
+//   came a few a frame, and the window's sides were black for 1-3 frames until they had.
 //
 // A tile is 6 KB of 16-bit texels, more than TMEM's 4 KB, so it is loaded in two parts. Bilinear filtering (Mario
 // Party 2's and 3's backgrounds; Mario Party 1 draws its tiles point-sampled) blends the texel at a coordinate with the
@@ -87,6 +92,8 @@ static s32 last_mirrored;
 static s32 frame;
 static s32 frame_4x3 = -2;
 static s32 told_4x3;
+// A tile's compressed bytes, for each of a game's slots past its own: no larger than its texels.
+static u8 archives[BOARD_BACK_ARCHIVES][TILE_WIDTH * TILE_HEIGHT * 2] __attribute__((aligned(16)));
 
 s32 board_back_4x3(void) {
     return frame - frame_4x3 <= 1;
@@ -291,6 +298,14 @@ void board_back_tile(Gfx** gfx, s32 x, s32 y, void* tile, void* right, void* bel
                        (PART_ROWS - ((rows <= PART_ROWS) && (below == NULL))) << G_TEXTURE_IMAGE_FRAC);
         board_back_quad(gfx, x, y + top, TILE_WIDTH, PART_ROWS, 0, 0);
     }
+}
+
+void* board_back_archive(s32 extra, u32 size) {
+    return ((extra >= 0) && (extra < BOARD_BACK_ARCHIVES) && (size <= sizeof(archives[0]))) ? archives[extra] : NULL;
+}
+
+s32 board_back_own_archive(void* bytes) {
+    return ((u8*)bytes >= &archives[0][0]) && ((u8*)bytes < &archives[BOARD_BACK_ARCHIVES][0]);
 }
 
 void board_back_end(Gfx** gfx) {
