@@ -8,17 +8,18 @@
 //
 // - The scissor. Each game sets a camera's scissor before its view is drawn, and RT64 keeps a scissor that stops short
 //   of 4:3's edges as far in from the window's, so a board, whose camera keeps the console's overscan border (16, 12,
-//   304, 228), drew in a box with black at its sides. A camera whose scissor is the whole screen or that border is
-//   drawn to the window's edges (gEXSetScissor, from the left and right): from top to bottom for the border, and
-//   between the game's own top and bottom while it animates them, as Mario Party 2's board wipe between turns closes it
-//   to a band across the middle. Mario Party 3's wipes it sideways instead, 32 pixels a frame: the left edge goes
-//   across to close it, then the right edge to open it again after the camera cuts to the next player. A scissor on
-//   those steps with one edge at the border's is widened too, each edge as far across the window as across the border
-//   (an origin of that fraction of the window's width), so its 3D keeps its projection and the wipe crosses the window
-//   as it crosses the console's screen. A screen split between players (a minigame's halves and quarters, at 160)
-//   keeps the game's, and so does every camera while the picture is 4:3 (board_back.c: a board's opening scene, whose
-//   map is no wider than 4:3, or a scene the game draws at 4:3), so that its 3D, the scene's host and the players among
-//   them, keeps inside 4:3 with its background, not out over the black at the window's sides.
+//   304, 228), drew in a box with black at its sides. A camera whose scissor is the whole screen (its right edge at
+//   320, or at 319 as some scenes give it) or that border is drawn to the window's edges (gEXSetScissor, from the left
+//   and right): from top to bottom for the border, and between the game's own top and bottom while it animates them, as
+//   Mario Party 2's board wipe between turns closes it to a band across the middle. Mario Party 3's wipes it sideways
+//   instead, 32 pixels a frame: the left edge goes across to close it, then the right edge to open it again after the
+//   camera cuts to the next player. A scissor on those steps with one edge at the border's is widened too, each edge as
+//   far across the window as across the border (an origin of that fraction of the window's width), so its 3D keeps its
+//   projection and the wipe crosses the window as it crosses the console's screen. A screen split between players (a
+//   minigame's halves and quarters, at 160) keeps the game's, and so does every camera while the picture is 4:3
+//   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
+//   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
+//   at the window's sides.
 // - The viewport. A board pans its 3D by moving its camera's viewport, as large as the map, by as much as it scrolls
 //   the background, and RT64 widens a viewport about the screen's middle: what the viewport moved by was widened too,
 //   so a pan moved the board's spaces and characters a third further than the board under them, and a viewport is
@@ -34,6 +35,12 @@
 // and reads one before as the microcode's own command.
 
 #define SCREEN_W 320
+// The whole screen's right edge as some scenes give it, at the last pixel and not past it: Mario Party's Bowl Over,
+// Tightrope Treachery, Tug o' War and Chance Time set a camera's scissor to (0, 0, 319, 239), as do Mario Party 2's
+// Bowl Over, Chance Time and Rainbow Run and Mario Party 3's Fridged Bridges. The console leaves the screen's last
+// column undrawn; RT64 kept such a camera's view inside 4:3, beside views of the whole screen that reach the window's
+// edges.
+#define SCREEN_LAST (SCREEN_W - 1)
 #define SCREEN_H 240
 #define BORDER_LEFT 16
 #define BORDER_TOP 12
@@ -92,7 +99,7 @@ static u16 border_origin(s32 x) {
 }
 
 s32 camera_view_widened(s32 left, s32 right) {
-    return ((left == 0) && (right == SCREEN_W)) || border_wipe(left, right);
+    return ((left == 0) && ((right == SCREEN_W) || (right == SCREEN_LAST))) || border_wipe(left, right);
 }
 
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
