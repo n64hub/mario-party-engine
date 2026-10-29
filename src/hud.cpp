@@ -1,7 +1,9 @@
 // A board's HUD at the picture's sides: in a picture wider than 4:3, the four players' panels (each a sprite group of
 // the sprite manager) drawn at the window's left and right edges, as far in from them as they are from 4:3's on a
-// console, the way the PC ports of N64 games that widen the picture draw a HUD. Everything else the sprite manager
-// draws (text windows, menus, a minigame's sprites) stays in the 4:3 middle, where RT64 draws a rectangle by default.
+// console, the way the PC ports of N64 games that widen the picture draw a HUD. A picture at least as wide as the
+// screen (a minigame's sky behind its 3D) is drawn stretched over the whole window wherever the game puts it.
+// Everything else the sprite manager draws (text windows, menus, a minigame's sprites) stays in the 4:3 middle, where
+// RT64 draws a rectangle by default.
 //
 // A game's hooks (its us.toml) call these natives, since the sprite manager's code is the decompilations' asm:
 // - mp_hud_panel_at where the board sets a player's panel's place (MBStatusPosSet and its kin), with the panel's group
@@ -21,6 +23,13 @@
 //   aligned to the window's edges (gEXSetScissorAlign, then a scissor of the whole screen): the sprite pass's and a
 //   sprite's own scissors stop at 4:3's edges, which would cut off a panel drawn out past them. After the sprite,
 //   both go back to RT64's own and the scissor to the whole screen, the sprite pass's.
+// - mp_hud_sprite_width, from a game's hook just before mp_hud_sprite_start, how wide the sprite is on the screen (its
+//   frame's width by its scale; a game whose hook doesn't say has every sprite drawn as RT64 draws it). One at least as
+//   wide as the screen is a picture behind the scene, and its rectangles are drawn stretched over the window
+//   (gEXSetRectAspect G_EX_ASPECT_STRETCH) until the sprite's end. RT64 stretches a rectangle by itself only while it
+//   covers the whole width of the screen's scissor, so such a picture moved a few pixels (Mario Party 2's Abandon
+//   Ship's sky following the camera in its finish shot, from 0 to -6) dropped into the 4:3 middle, with the frame's
+//   clear beside it, while the scene's 3D went on to the window's edges. In a 4:3 picture it stays as RT64 draws it.
 // - recomp_hud_4x3, from the engine's patches/board_back.c, whether the picture is 4:3: a board's opening scene's map
 //   is no wider than 4:3, with black at the window's sides, and the panels stay where the game puts them, inside 4:3
 //   with the scene, rather than out over the black. src/wipe.cpp asks it too (picture_is_4x3).
@@ -68,6 +77,9 @@ namespace {
     Panel panels[PANELS];
     // Whether the sprite being drawn started an alignment.
     bool sprite_aligned = false;
+    // How wide the next sprite is on the screen, from mp_hud_sprite_width, and whether the one being drawn is stretched.
+    float sprite_width = 0.0f;
+    bool sprite_stretched = false;
     // Whether the picture is 4:3.
     bool picture_4x3 = false;
 
@@ -159,7 +171,23 @@ bool mp_display_list::picture_is_4x3() {
     return picture_4x3;
 }
 
+extern "C" void mp_hud_sprite_width(uint8_t* rdram, float width) {
+    sprite_width = width;
+}
+
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
+    // A picture as wide as the screen: never a panel's, which is a third of it.
+    float width = sprite_width;
+    sprite_width = 0.0f;
+    sprite_stretched = !picture_4x3 && (width >= SCREEN_W);
+    if (sprite_stretched) {
+        GfxCommand commands[2];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_STRETCH);
+        emit(rdram, gfx, commands, 2);
+        return;
+    }
+
     // A panel's sprite follows its corner even while the picture is 4:3, and is aligned only when it isn't.
     int panel = panel_of(rdram, sprite);
     float in = (panel >= 0) ? eased_in(rdram, panels[panel], sprite) : 0.0f;
@@ -184,6 +212,14 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
+    if (sprite_stretched) {
+        sprite_stretched = false;
+        GfxCommand commands[2];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);
+        emit(rdram, gfx, commands, 2);
+        return;
+    }
     if (!sprite_aligned) {
         return;
     }

@@ -24,8 +24,9 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   places on the map, kept to the picture's aspect and moved by an interpolated scroll. A map no wider than 4:3 (a
   board's opening scene), or a scene a game's patch says the game draws at 4:3 (board_back_scene_4x3), keeps black at
   the window's sides, and the camera's view, the HUD and a screen wipe stay inside 4:3 with it.
-- `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, through
-  hooks in the sprite manager, whose code is the decompilations' asm.
+- `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, and a
+  picture as wide as the screen (a minigame's sky) stretched over the window wherever the game puts it, through hooks
+  in the sprite manager, whose code is the decompilations' asm.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. In a 4:3
   picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there.
@@ -76,8 +77,9 @@ Anything else the games share comes here when a change needs it in more than one
   values have the same names in every game.
 - The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_4x3`), and its
   `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
-- The game's `us.toml` hooks the sprite manager and its board's panels for `src/hud.cpp`, and the wipe module and the
-  end of a frame's last display list for `src/wipe.cpp` (their headers say which functions).
+- The game's `us.toml` hooks the sprite manager (with each sprite's width on the screen, from its own layout of a
+  sprite) and its board's panels for `src/hud.cpp`, and the wipe module and the end of a frame's last display list for
+  `src/wipe.cpp` (their headers say which functions).
 
 ## Changing it
 
