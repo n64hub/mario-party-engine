@@ -51,6 +51,13 @@ s32 board_back_4x3(void);
 // window's width: 4:3 for a background that is a 2D picture as large as the screen or a stage built only as wide as
 // 4:3, with nothing past it, and wider for a stage whose 3D ends short of a wide window's edges.
 void board_back_scene_widest(f32 widest);
+// A stage whose 3D ends at widest (its width over its height, where it is narrowest across the scene's play), from a
+// game's patch once the stage is made or as it plays: the times the patch makes it wider in x, about its middle under
+// the camera, so that it reaches the window's edges with a little to spare (1 in a window no wider), and the scene's
+// widest moved out by as much, so a window made wider still is black past it. Only for a stage that looks right wider:
+// a sea or a field with nothing standing in it, what stands in it a model apart, not a room's walls, a painted backdrop
+// or a model that holds its props too.
+f32 board_back_stage_widened(f32 widest);
 // A new frame, from the process scheduler, once a frame: a picture is 4:3 only while a background says so.
 void board_back_frame(void);
 

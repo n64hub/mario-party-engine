@@ -79,6 +79,8 @@ void guOrtho(Mtx* m, f32 l, f32 r, f32 b, f32 t, f32 n, f32 f, f32 scale);
 void guMtxF2L(float mf[4][4], Mtx* m);
 // src/hud.cpp's: the widest the frame's picture is drawn.
 void recomp_hud_widest(f32 widest);
+// src/aspect_ratio.cpp's: the picture's width over its height, 4:3 at least.
+f32 mp_aspect_ratio(void);
 
 // A list is drawn while the frames after it are built, so there are more of them than the game's frames in flight.
 static Gfx lists[LISTS][BOARD_BACK_COMMANDS];
@@ -113,6 +115,20 @@ s32 board_back_4x3(void) {
 
 void board_back_scene_widest(f32 widest) {
     scene_widest = widest;
+}
+
+// How much wider than the window a widened stage is made: its widest is measured at a far edge on a few shots, and a
+// camera may turn a little.
+#define STAGE_SPARE 1.1f
+
+f32 board_back_stage_widened(f32 widest) {
+    f32 times = mp_aspect_ratio() * STAGE_SPARE / widest;
+
+    if (times < 1.0f) {
+        times = 1.0f;
+    }
+    board_back_scene_widest(widest * times);
+    return times;
 }
 
 // src/hud.cpp told of a change.
