@@ -29,7 +29,10 @@
 //   (gEXSetRectAspect G_EX_ASPECT_STRETCH) until the sprite's end. RT64 stretches a rectangle by itself only while it
 //   covers the whole width of the screen's scissor, so such a picture moved a few pixels (Mario Party 2's Abandon
 //   Ship's sky following the camera in its finish shot, from 0 to -6) dropped into the 4:3 middle, with the frame's
-//   clear beside it, while the scene's 3D went on to the window's edges. In a 4:3 picture it stays as RT64 draws it.
+//   clear beside it, while the scene's 3D went on to the window's edges. In a 4:3 picture it is kept to 4:3
+//   (G_EX_ASPECT_ADJUST): RT64 by itself would stretch the rectangles of one that covers the scissor's whole width,
+//   only its middle showing between the black at the window's sides and what stands on it no longer on it (Mario
+//   Party 2's Bumper Balloon Cars' sand under the cars).
 // - recomp_hud_4x3, from the engine's patches/board_back.c, whether the picture is 4:3: a board's opening scene's map
 //   is no wider than 4:3, with black at the window's sides, and the panels stay where the game puts them, inside 4:3
 //   with the scene, rather than out over the black. src/wipe.cpp asks it too (picture_is_4x3).
@@ -77,9 +80,10 @@ namespace {
     Panel panels[PANELS];
     // Whether the sprite being drawn started an alignment.
     bool sprite_aligned = false;
-    // How wide the next sprite is on the screen, from mp_hud_sprite_width, and whether the one being drawn is stretched.
+    // How wide the next sprite is on the screen, from mp_hud_sprite_width, and whether the one being drawn is a picture
+    // as wide as the screen, with an aspect of its own until its end.
     float sprite_width = 0.0f;
-    bool sprite_stretched = false;
+    bool sprite_picture = false;
     // Whether the picture is 4:3.
     bool picture_4x3 = false;
 
@@ -179,11 +183,11 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     // A picture as wide as the screen: never a panel's, which is a third of it.
     float width = sprite_width;
     sprite_width = 0.0f;
-    sprite_stretched = !picture_4x3 && (width >= SCREEN_W);
-    if (sprite_stretched) {
+    sprite_picture = (width >= SCREEN_W);
+    if (sprite_picture) {
         GfxCommand commands[2];
         gEXEnable(&commands[0]);
-        gEXSetRectAspect(&commands[1], G_EX_ASPECT_STRETCH);
+        gEXSetRectAspect(&commands[1], picture_4x3 ? G_EX_ASPECT_ADJUST : G_EX_ASPECT_STRETCH);
         emit(rdram, gfx, commands, 2);
         return;
     }
@@ -212,8 +216,8 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
-    if (sprite_stretched) {
-        sprite_stretched = false;
+    if (sprite_picture) {
+        sprite_picture = false;
         GfxCommand commands[2];
         gEXEnable(&commands[0]);
         gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);
