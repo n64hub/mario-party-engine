@@ -46,12 +46,13 @@
 // A map that reaches no further than 4:3's sides (a board's opening scene, where the order of play is decided, is one
 // of 320x240) leaves black at the window's sides, as the game has nothing beside it to draw. The picture is 4:3 then,
 // and what else a wider picture draws out to the window's edges keeps to 4:3 with it, rather than over the black: a
-// camera's view (camera_view.c) and the board's HUD (src/hud.cpp, told through the native recomp_hud_4x3). It is 4:3
-// for a frame whose background says so, from the map's whole width and not the tiles loaded, so that a board whose
+// camera's view (camera_view.c) and the board's HUD (src/hud.cpp, told through the native recomp_hud_widest). It is
+// 4:3 for a frame whose background says so, from the map's whole width and not the tiles loaded, so that a board whose
 // tiles past 4:3 are still on their way stays wide, and until a frame after the last such background, so that a
-// screen without one (a minigame) is drawn as wide as the window. A scene the game draws at 4:3 whatever its background
-// (board_back_scene_4x3: a 2D picture of 320x240 behind its 3D, or a stage built only as wide as 4:3) is 4:3 as long
-// as it plays.
+// screen without one (a minigame) is drawn as wide as the window. A scene the game draws no wider than an aspect of its
+// own whatever its background (board_back_scene_widest) is drawn no wider than that as long as it plays: 4:3 for a 2D
+// picture of 320x240 behind its 3D or a stage built only as wide as 4:3, wider for a stage whose 3D ends short of a
+// wide window's edges, its camera's view stopping where the stage does and black past it.
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list (it forgets it at each list's start).
 
@@ -72,11 +73,12 @@
 #define RIGHT_COLUMNS 4
 // How far a map may reach past 4:3's sides, in the screen's pixels, and still leave its picture 4:3.
 #define EDGE 0.5f
+#define WIDEST_4X3 (4.0f / 3.0f)
 
 void guOrtho(Mtx* m, f32 l, f32 r, f32 b, f32 t, f32 n, f32 f, f32 scale);
 void guMtxF2L(float mf[4][4], Mtx* m);
-// src/hud.cpp's: whether the frame's picture is 4:3.
-void recomp_hud_4x3(s32 picture_4x3);
+// src/hud.cpp's: the widest the frame's picture is drawn.
+void recomp_hud_widest(f32 widest);
 
 // A list is drawn while the frames after it are built, so there are more of them than the game's frames in flight.
 static Gfx lists[LISTS][BOARD_BACK_COMMANDS];
@@ -93,33 +95,39 @@ static s32 last_mirrored;
 // The process scheduler's frames, the last one a background said the picture is 4:3 in, and what src/hud.cpp was told.
 static s32 frame;
 static s32 frame_4x3 = -2;
-static s32 told_4x3;
-// Whether the scene playing is drawn at 4:3, as the game last said.
-static s32 scene_4x3;
+static f32 told_widest;
+// The widest the scene playing is drawn, as the game last said: 0 for the window's width.
+static f32 scene_widest;
 // A tile's compressed bytes, for each of a game's slots past its own: no larger than its texels.
 static u8 archives[BOARD_BACK_ARCHIVES][TILE_WIDTH * TILE_HEIGHT * 2] __attribute__((aligned(16)));
 
-s32 board_back_4x3(void) {
-    return scene_4x3 || (frame - frame_4x3 <= 1);
+f32 board_back_widest(void) {
+    return (frame - frame_4x3 <= 1) ? WIDEST_4X3 : scene_widest;
 }
 
-void board_back_scene_4x3(s32 picture_4x3) {
-    scene_4x3 = picture_4x3;
+s32 board_back_4x3(void) {
+    f32 widest = board_back_widest();
+
+    return (widest > 0.0f) && (widest <= WIDEST_4X3);
+}
+
+void board_back_scene_widest(f32 widest) {
+    scene_widest = widest;
 }
 
 // src/hud.cpp told of a change.
-static void tell_4x3(void) {
-    s32 picture_4x3 = board_back_4x3();
+static void tell_widest(void) {
+    f32 widest = board_back_widest();
 
-    if (picture_4x3 != told_4x3) {
-        told_4x3 = picture_4x3;
-        recomp_hud_4x3(picture_4x3);
+    if (widest != told_widest) {
+        told_widest = widest;
+        recomp_hud_widest(widest);
     }
 }
 
 void board_back_frame(void) {
     frame++;
-    tell_4x3();
+    tell_widest();
 }
 
 // Whether RT64 draws frames between the last frame's view and this one, or this is a cut.
@@ -227,7 +235,7 @@ void board_back_view(Gfx** gfx, f32 left, f32 top, f32 scale, s32 mirrored, s32 
     } else {
         frame_4x3 = frame - 2;
     }
-    tell_4x3();
+    tell_widest();
     if (pans(left, top, scale, mirrored)) {
         gEXMatrixGroupDecomposed((*gfx)++, SCROLL_GROUP, G_EX_PUSH, G_MTX_MODELVIEW, G_EX_COMPONENT_INTERPOLATE,
                                  G_EX_COMPONENT_SKIP, G_EX_COMPONENT_INTERPOLATE, G_EX_COMPONENT_SKIP,

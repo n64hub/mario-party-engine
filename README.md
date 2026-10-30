@@ -22,8 +22,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   A game's patches of the two functions that start a camera's view call it.
 - `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
   places on the map, kept to the picture's aspect and moved by an interpolated scroll. A map no wider than 4:3 (a
-  board's opening scene), or a scene a game's patch says the game draws at 4:3 (board_back_scene_4x3), keeps black at
-  the window's sides, and the camera's view, the HUD and a screen wipe stay inside 4:3 with it.
+  board's opening scene), or a scene a game's patch says the game draws at 4:3 (board_back_scene_widest), keeps black
+  at the window's sides, and the camera's view, the HUD and a screen wipe stay inside 4:3 with it. A scene a game's
+  patch says is drawn no wider than an aspect past 4:3, a stage whose 3D ends short of a wide window's edges, is drawn
+  to the window's edges up to that width, with black only past it.
 - `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, and a
   picture as wide as the screen (a minigame's sky) stretched over the window wherever the game puts it, through hooks
   in the sprite manager, whose code is the decompilations' asm.
@@ -35,7 +37,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
   patch that has to know how far past 4:3 the window shows (Mario Party's board camera, kept where the wider picture
-  stays on the map).
+  stays on the map), and for `src/hud.cpp`, whether a scene drawn no wider than an aspect past 4:3 stops short of the
+  window's edges.
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
@@ -43,8 +46,9 @@ Anything else the games share comes here when a change needs it in more than one
 
 ## How a game uses it
 
-- `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp` and `src/wipe.cpp` into
-  the game, with RT64's `include/` on its path, and `src/aspect_ratio.cpp` if its patches call `mp_aspect_ratio`.
+- `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp`, `src/wipe.cpp` and
+  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width) into the game, with RT64's `include/` on its
+  path.
 - `patches/Makefile` compiles `lib/mario-party-engine/patches/*.c` with the game's own patches, against the game's
   decompilation's headers, its `patches/patches.h` and RT64's `include/` (the extended GBI the camera and background
   draw with).
@@ -75,7 +79,7 @@ Anything else the games share comes here when a change needs it in more than one
 
   `HuPrcCall`, `HuPrcSleep`, `HuPrcTerminate`, `HuPrcCurrentGet`, `Process` and its fields, and the `EXEC_PROCESS_*`
   values have the same names in every game.
-- The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_4x3`), and its
+- The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_widest`), and its
   `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
 - The game's `us.toml` hooks the sprite manager (with each sprite's width on the screen, from its own layout of a
   sprite) and its board's panels for `src/hud.cpp`, and the wipe module and the end of a frame's last display list for

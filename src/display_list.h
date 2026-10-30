@@ -20,6 +20,12 @@ namespace mp_display_list {
 
     // Whether the frame's picture is 4:3, as the engine's patches/board_back.c last told src/hud.cpp.
     bool picture_is_4x3();
+    // How far the frame's picture reaches each side of the screen's middle, in the 320x240 screen's pixels, when it
+    // stops short of the window's edges: a scene drawn no wider than an aspect past 4:3 (patches/board_back.c's
+    // board_back_scene_widest) in a window wider still. 0 for a picture that reaches them, or a 4:3 one.
+    float picture_short_half();
+    // The aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand (src/aspect_ratio.cpp).
+    float picture_aspect();
 
     // Writes commands at *gfx, the display list's next command, and moves it past them.
     inline void emit(uint8_t* rdram, gpr gfx, const GfxCommand* commands, int count) {

@@ -40,13 +40,17 @@ void* board_back_archive(s32 extra, u32 size);
 // Whether a slot's bytes are board_back_archive's, which the game's heap never frees.
 s32 board_back_own_archive(void* bytes);
 
-// Whether the frame's picture is 4:3: its background a map that reaches no further than 4:3's sides, as a board's
-// opening scene's does, or a scene the game says is drawn at 4:3, so the window's sides are black. The camera's view and
-// the board's HUD stay inside 4:3 then.
+// The widest the frame's picture is drawn, its width over its height, 0 for the window's width: 4:3 for a background
+// that is a map reaching no further than 4:3's sides, as a board's opening scene's is, or else the scene's
+// (board_back_scene_widest). A window wider than that is black past it, and the camera's view and the board's HUD stay
+// inside it.
+f32 board_back_widest(void);
+// Whether the frame's picture is 4:3 (board_back_widest).
 s32 board_back_4x3(void);
-// Whether the scene playing is drawn at 4:3 whatever its background, from a game's patch as each scene starts: its
-// background a 2D picture as large as the screen, or its 3D a stage built only as wide as 4:3, with nothing past it.
-void board_back_scene_4x3(s32 picture_4x3);
+// The widest the scene playing is drawn whatever its background, from a game's patch as each scene starts, 0 for the
+// window's width: 4:3 for a background that is a 2D picture as large as the screen or a stage built only as wide as
+// 4:3, with nothing past it, and wider for a stage whose 3D ends short of a wide window's edges.
+void board_back_scene_widest(f32 widest);
 // A new frame, from the process scheduler, once a frame: a picture is 4:3 only while a background says so.
 void board_back_frame(void);
 

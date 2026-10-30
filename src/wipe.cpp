@@ -51,10 +51,14 @@
 // after them. RT64 widens the 3D of a camera whose scissor is the whole screen, and draws a rectangle that samples a
 // copy of the frame (a framebuffer's tile) across the window, so a scene the game draws at 4:3 drew past 4:3 over the
 // black: Mario Party 2's Crazy Cutters its logs and spiked bars, and Mario Party 3's results on the star stage the
-// stage's 3D.
+// stage's 3D. A picture drawn no wider than an aspect past 4:3 in a window wider still (picture_short_half) is black
+// past its own edges the same way, over what its scene, its wipes and its pictures as wide as the screen draw there,
+// which are drawn as a wide picture's are.
 //
 // In a 4:3 window the rectangles cover nothing past the screen. RT64 reads extended commands only after a gEXEnable in
 // the same display list, so each start sends one.
+
+#include <cmath>
 
 #include "display_list.h"
 
@@ -266,9 +270,12 @@ extern "C" void mp_wipe_square_sides(uint8_t* rdram, gpr gfx, gpr left, gpr righ
 }
 
 extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
-    if (!picture_is_4x3()) {
+    // How far the picture reaches each side of the screen's middle, in the screen's pixels and in quarter pixels.
+    float half = picture_is_4x3() ? HALF : picture_short_half();
+    if (half <= 0.0f) {
         return at;
     }
+    int32_t half4 = (int32_t)std::lround(half * 4.0f);
 
     GfxCommand commands[22];
     gEXEnable(&commands[0]);
@@ -284,14 +291,16 @@ extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
     commands[8].values.word1 = 0;
     commands[9].values.word0 = G_SETFILLCOLOR << 24;
     commands[9].values.word1 = 0x00010001;
-    // From WIDE left of 4:3's left edge to it: a fill rectangle reaches 3/4 of a pixel past its right edge (RT64 draws
-    // it as a clear of its own area, under no scissor), taken off here. RT64 rounds an aligned rectangle's edges down
-    // to the game's pixels in the window, which put this one's right edge a pixel short of 4:3: it ends a pixel on.
-    gEXSetRectAlign(&commands[10], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0, (1 - HALF) * 4 - 3, 0);
+    // From WIDE left of 4:3's left edge to the picture's: a fill rectangle reaches 3/4 of a pixel past its right edge
+    // (RT64 draws it as a clear of its own area, under no scissor), taken off here. RT64 rounds an aligned rectangle's
+    // edges down to the game's pixels in the window, which put this one's right edge a pixel short of the picture's: it
+    // ends a pixel on.
+    gEXSetRectAlign(&commands[10], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0, 4 - half4 - 3, 0);
     fill(&commands[12], 0, 0);
-    // From 4:3's right edge to WIDE right of it, its left edge a pixel on for the same reason, which put it a pixel
-    // inside 4:3.
-    gEXSetRectAlign(&commands[13], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (1 - HALF) * 4, 0, (WIDE - HALF) * 4, 0);
+    // From the picture's right edge to WIDE right of 4:3's, its left edge a pixel on for the same reason, which put it
+    // a pixel inside the picture.
+    gEXSetRectAlign(&commands[13], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, half4 + (1 - SCREEN_W) * 4, 0,
+                    (WIDE - HALF) * 4, 0);
     fill(&commands[15], SCREEN_W, SCREEN_W);
     rect_own(&commands[16]);
     commands[18].values.word0 = G_RDPPIPESYNC << 24;

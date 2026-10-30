@@ -33,9 +33,11 @@
 //   (G_EX_ASPECT_ADJUST): RT64 by itself would stretch the rectangles of one that covers the scissor's whole width,
 //   only its middle showing between the black at the window's sides and what stands on it no longer on it (Mario
 //   Party 2's Bumper Balloon Cars' sand under the cars).
-// - recomp_hud_4x3, from the engine's patches/board_back.c, whether the picture is 4:3: a board's opening scene's map
-//   is no wider than 4:3, with black at the window's sides, and the panels stay where the game puts them, inside 4:3
-//   with the scene, rather than out over the black. src/wipe.cpp asks it too (picture_is_4x3).
+// - recomp_hud_widest, from the engine's patches/board_back.c, the widest the picture is drawn. In a 4:3 picture (a
+//   board's opening scene's map is no wider than 4:3, with black at the window's sides) the panels stay where the game
+//   puts them, inside 4:3 with the scene, rather than out over the black. In a picture drawn no wider than an aspect
+//   past 4:3, in a window wider still, they go to its edges rather than the window's, aligned from the window's centre.
+//   src/wipe.cpp asks it too (picture_is_4x3, picture_short_half).
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list, so each start sends one.
 
@@ -84,7 +86,8 @@ namespace {
     // as wide as the screen, with an aspect of its own until its end.
     float sprite_width = 0.0f;
     bool sprite_picture = false;
-    // Whether the picture is 4:3.
+    // The widest the picture is drawn, 0 for the window's width, and whether that is 4:3.
+    float picture_widest = 0.0f;
     bool picture_4x3 = false;
 
     float mem_f32(uint8_t* rdram, gpr address) {
@@ -166,13 +169,21 @@ extern "C" void mp_hud_reset(uint8_t* rdram) {
     }
 }
 
-// recomp_hud_4x3(picture_4x3), a native the patches call.
-extern "C" void recomp_hud_4x3(uint8_t* rdram, recomp_context* ctx) {
-    picture_4x3 = (int32_t)ctx->r4 != 0;
+// recomp_hud_widest(widest), a native the patches call, its float in f12.
+extern "C" void recomp_hud_widest(uint8_t* rdram, recomp_context* ctx) {
+    picture_widest = ctx->f12.fl;
+    picture_4x3 = (picture_widest > 0.0f) && (picture_widest <= 4.0f / 3.0f);
 }
 
 bool mp_display_list::picture_is_4x3() {
     return picture_4x3;
+}
+
+float mp_display_list::picture_short_half() {
+    if (picture_4x3 || (picture_widest <= 0.0f) || (picture_widest >= picture_aspect())) {
+        return 0.0f;
+    }
+    return SCREEN_H * picture_widest / 2.0f;
 }
 
 extern "C" void mp_hud_sprite_width(uint8_t* rdram, float width) {
@@ -203,10 +214,17 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     // The alignment a fraction of the window from its left edge (0) to its right (G_EX_ORIGIN_RIGHT): from the panel's
     // edge to the middle (half of it) as it is eased in. A rectangle's x is from there less as much of the screen,
     // which RT64 adds back as it does: from the left edge, the 4:3 middle's left edge, or the right edge less the
-    // screen's width.
+    // screen's width. In a picture that stops short of the window's edges, the same fraction of the picture, from the
+    // window's centre (where a rectangle's x is from the centre).
     float edge = 0.5f * (1.0f - in);
-    uint16_t origin = (uint16_t)std::lround(G_EX_ORIGIN_RIGHT * (0.5f + panels[panel].side * edge));
+    float fraction = 0.5f + panels[panel].side * edge;
+    float half = picture_short_half();
+    uint16_t origin = (uint16_t)std::lround(G_EX_ORIGIN_RIGHT * fraction);
     int32_t offset = -(int32_t)((origin * SCREEN_W * 4) / G_EX_ORIGIN_RIGHT);
+    if (half > 0.0f) {
+        origin = G_EX_ORIGIN_CENTER;
+        offset = (int32_t)std::lround(((fraction - 0.5f) * 2.0f * half - fraction * SCREEN_W) * 4.0f);
+    }
     GfxCommand commands[7];
     gEXEnable(&commands[0]);
     gEXSetRectAlign(&commands[1], origin, origin, offset, 0, offset, 0);

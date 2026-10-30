@@ -19,7 +19,9 @@
 //   minigame's halves and quarters, at 160) keeps the game's, and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
-//   at the window's sides.
+//   at the window's sides. A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D
+//   ends short of a wide window's edges) has the scissor that would reach the window's edges stop that far from the
+//   screen's middle (an origin at the window's centre), so its 3D ends there, with black past it.
 // - The viewport. A board pans its 3D by moving its camera's viewport, as large as the map, by as much as it scrolls
 //   the background, and RT64 widens a viewport about the screen's middle: what the viewport moved by was widened too,
 //   so a pan moved the board's spaces and characters a third further than the board under them, and a viewport is
@@ -42,6 +44,7 @@
 // edges.
 #define SCREEN_LAST (SCREEN_W - 1)
 #define SCREEN_H 240
+#define WIDEST_4X3 (4.0f / 3.0f)
 #define BORDER_LEFT 16
 #define BORDER_TOP 12
 #define BORDER_RIGHT 304
@@ -105,6 +108,7 @@ s32 camera_view_widened(s32 left, s32 right) {
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     u16 left_origin = G_EX_ORIGIN_LEFT;
     u16 right_origin = G_EX_ORIGIN_RIGHT;
+    f32 widest = board_back_widest();
 
     // A closed wipe draws nothing, as the game's own scissor does.
     if (camera_view_widened(left, right) && (left < right) && !board_back_4x3()) {
@@ -117,6 +121,15 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
             right_origin = border_origin(right);
         }
         gEXEnable((*gfx)++);
+        if (widest > WIDEST_4X3) {
+            // Each edge as far across the picture's width (SCREEN_H * widest) from its middle, the window's centre.
+            f32 width = SCREEN_H * widest;
+            s32 left_x = (s32)(width * ((f32)left_origin / G_EX_ORIGIN_RIGHT - 0.5f));
+            s32 right_x = (s32)(width * ((f32)right_origin / G_EX_ORIGIN_RIGHT - 0.5f));
+            gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, left_x, top, right_x,
+                          bottom);
+            return;
+        }
         gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, 0, top, 0, bottom);
         return;
     }
