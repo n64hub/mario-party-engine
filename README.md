@@ -39,6 +39,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   patch that has to know how far past 4:3 the window shows (Mario Party's board camera, kept where the wider picture
   stays on the map), and for `src/hud.cpp`, whether a scene drawn no wider than an aspect past 4:3 stops short of the
   window's edges.
+- `docs/mods.md`: installing and making a mod for the three games' desktop builds, what each game gives a mod, and
+  an example.
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
