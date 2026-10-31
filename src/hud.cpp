@@ -15,9 +15,20 @@
 //   over its first EASE pixels, the alignment a fraction of the window between its edge and its middle, so it slides as
 //   it does in 4:3. Its corner is its place the next time it is drawn, or for a place off the screen, where it first
 //   stops on the screen.
+// - mp_hud_item_at where the board carries the item out of a player's panel (to over the character as it is used, a
+//   short way out, or back in), before each move, with the item's sprite (a member of the panel's group) and where it
+//   keeps its place in the group (two floats, x and y). Its place at the first carry since the panel's group was set
+//   is where it rests in the panel, and wherever it is drawn away from there, carried or put somewhere by other code,
+//   it eases into the 4:3 middle over its first CARRY pixels, further than the panel if it must: the board carries it
+//   to its 4:3 places, over a character standing in the middle of the screen. Back at rest it is the panel's again.
+// - mp_hud_hand_read where the game reads the picture of the hand that carries a player's item, and mp_hud_hand_group
+//   where it next sets a group's picture, the hand's group: that player's hand is drawn with its panel and eased as
+//   far as the item, so it holds the item from where the panel is drawn to over the character. A game's hook calls
+//   mp_hud_hand_read only for the player whose turn it is, whose item it is: another player's hand (a board's event
+//   at their panel) stays where the game puts it, with the sprites it comes with.
 // - mp_hud_group_killed where the sprite manager kills a group (HuSprGrpKill), and mp_hud_reset where it starts again
-//   with no groups (its init, which forgets them without killing them), so a group the board's panels used is
-//   forgotten when the board frees them, before the memory goes to another group.
+//   with no groups (its init, which forgets them without killing them), so a group the board's panels or hands used
+//   is forgotten when the board frees them, before the memory goes to another group.
 // - mp_hud_sprite_start and mp_hud_sprite_end around the function that draws one sprite into the display list: for a
 //   panel's sprite, RT64's rectangle alignment to the window's edge (gEXSetRectAlign) and every scissor until the end
 //   aligned to the window's edges (gEXSetScissorAlign, then a scissor of the whole screen): the sprite pass's and a
@@ -54,9 +65,15 @@ namespace {
     constexpr int32_t PANEL_HALF = SCREEN_W / 6;
     // A sprite group's count of members, a u16, in every game.
     constexpr int GROUP_COUNT = 0x0A;
-    // How far in from its corner the game moves a panel before it is drawn wholly in the 4:3 middle: as far as a 2 VS 2
-    // game moves the lower panels.
-    constexpr float EASE = 16.0f;
+    // How far in from its corner the game moves a panel before it is drawn wholly in the 4:3 middle: as far as Mario
+    // Party 2's 1 VS 3 teams move the lower right panel, 8 in and 2 up (a 2 VS 2 game moves the lower panels 16).
+    // Further, that panel stopped half eased, out of line with the panels of its column.
+    constexpr float EASE = 8.0f;
+    // How far the board carries a panel's item from its rest before it is drawn wholly in the 4:3 middle: less than
+    // Mario Party 2's shortest carry to or from over the character, 61 pixels (the upper left panel's, as an item is
+    // put back), so the item and its hand are there at its 4:3 place over the character. A short carry, 32, stops part
+    // way.
+    constexpr float CARRY = 48.0f;
 
     enum class Corner {
         // Its place the next time it is drawn.
@@ -77,9 +94,17 @@ namespace {
         float corner_x, corner_y;
         // Its place when its first sprite was last drawn, once a frame.
         float last_x, last_y;
+        // The group of the hand that carries its item, 0 for none, and the item's sprite, 0 until the board first
+        // carries it, with where the group keeps its place and its place at rest.
+        gpr hand;
+        gpr item;
+        gpr item_place;
+        float rest_x, rest_y;
     };
 
     Panel panels[PANELS];
+    // The player whose hand the game read last, until it sets the hand's group's picture: -1 for none.
+    int hand_read = -1;
     // Whether the sprite being drawn started an alignment.
     bool sprite_aligned = false;
     // How wide the next sprite is on the screen, from mp_hud_sprite_width, and whether the one being drawn is a picture
@@ -121,18 +146,41 @@ namespace {
         return std::fmin(std::sqrt(in * in + down * down) / EASE, 1.0f);
     }
 
-    // Which panel's group has this sprite as a member, -1 for none.
-    int panel_of(uint8_t* rdram, gpr sprite) {
+    // How far panel's item is carried toward the 4:3 middle, 0 to 1, by how far it is from its rest.
+    float carried(uint8_t* rdram, const Panel& panel) {
+        if (panel.item == 0) {
+            return 0.0f;
+        }
+        float x = mem_f32(rdram, panel.item_place) - panel.rest_x;
+        float y = mem_f32(rdram, panel.item_place + 4) - panel.rest_y;
+        return std::fmin(std::sqrt(x * x + y * y) / CARRY, 1.0f);
+    }
+
+    // Whether the sprite group at group, its members' addresses at members bytes into it, has this sprite as a member.
+    bool has_member(uint8_t* rdram, gpr group, int32_t members, gpr sprite) {
+        uint16_t count = MEM_HU(GROUP_COUNT, group);
+        for (uint16_t m = 0; m < count; m++) {
+            if ((gpr)(int32_t)MEM_W(members + m * 4, group) == sprite) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Which panel's group has this sprite as a member, -1 for none, or else which panel's hand's group (hand true).
+    int panel_of(uint8_t* rdram, gpr sprite, bool& hand) {
+        hand = false;
         for (int i = 0; i < PANELS; i++) {
             const Panel& panel = panels[i];
-            if (panel.group == 0) {
-                continue;
+            if ((panel.group != 0) && has_member(rdram, panel.group, panel.members, sprite)) {
+                return i;
             }
-            uint16_t count = MEM_HU(GROUP_COUNT, panel.group);
-            for (uint16_t m = 0; m < count; m++) {
-                if ((gpr)(int32_t)MEM_W(panel.members + m * 4, panel.group) == sprite) {
-                    return i;
-                }
+        }
+        for (int i = 0; i < PANELS; i++) {
+            const Panel& panel = panels[i];
+            if ((panel.group != 0) && (panel.hand != 0) && has_member(rdram, panel.hand, panel.members, sprite)) {
+                hand = true;
+                return i;
             }
         }
         return -1;
@@ -147,6 +195,9 @@ extern "C" void mp_hud_panel_at(uint8_t* rdram, int32_t player, gpr group, int32
     }
     Panel& panel = panels[player];
     int32_t middle = x + PANEL_HALF;
+    if (panel.group != group) {
+        panel.item = 0;
+    }
     panel.group = group;
     panel.members = members;
     panel.place = place;
@@ -155,10 +206,39 @@ extern "C" void mp_hud_panel_at(uint8_t* rdram, int32_t player, gpr group, int32
     panel.last_x = panel.last_y = NAN;
 }
 
+// mp_hud_item_at(player, sprite, place): the board is about to move player's item, the sprite at sprite, which keeps
+// its place, x and y, in the floats at place.
+extern "C" void mp_hud_item_at(uint8_t* rdram, int32_t player, gpr sprite, gpr place) {
+    if ((player < 0) || (player >= PANELS) || (panels[player].group == 0) || (panels[player].item == sprite)) {
+        return;
+    }
+    Panel& panel = panels[player];
+    panel.item = sprite;
+    panel.item_place = place;
+    panel.rest_x = mem_f32(rdram, place);
+    panel.rest_y = mem_f32(rdram, place + 4);
+}
+
+extern "C" void mp_hud_hand_read(uint8_t* rdram, int32_t player) {
+    hand_read = ((player >= 0) && (player < PANELS)) ? player : -1;
+}
+
+extern "C" void mp_hud_hand_group(uint8_t* rdram, gpr group) {
+    if (hand_read < 0) {
+        return;
+    }
+    panels[hand_read].hand = group;
+    hand_read = -1;
+}
+
 extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
     for (Panel& panel : panels) {
         if (panel.group == group) {
             panel.group = 0;
+            panel.item = 0;
+        }
+        if (panel.hand == group) {
+            panel.hand = 0;
         }
     }
 }
@@ -166,7 +246,10 @@ extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
 extern "C" void mp_hud_reset(uint8_t* rdram) {
     for (Panel& panel : panels) {
         panel.group = 0;
+        panel.hand = 0;
+        panel.item = 0;
     }
+    hand_read = -1;
 }
 
 // recomp_hud_widest(widest), a native the patches call, its float in f12.
@@ -203,9 +286,14 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
         return;
     }
 
-    // A panel's sprite follows its corner even while the picture is 4:3, and is aligned only when it isn't.
-    int panel = panel_of(rdram, sprite);
+    // A panel's sprite follows its corner even while the picture is 4:3, and is aligned only when it isn't. Its item,
+    // and the hand that carries it, are as far in as the panel or as far as the item is carried, whichever is further.
+    bool hand = false;
+    int panel = panel_of(rdram, sprite, hand);
     float in = (panel >= 0) ? eased_in(rdram, panels[panel], sprite) : 0.0f;
+    if ((panel >= 0) && (hand || (sprite == panels[panel].item))) {
+        in = std::fmax(in, carried(rdram, panels[panel]));
+    }
     sprite_aligned = !picture_4x3 && (panel >= 0) && (panels[panel].side != 0);
     if (!sprite_aligned) {
         return;
