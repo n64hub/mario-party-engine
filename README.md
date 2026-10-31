@@ -41,6 +41,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   window's edges.
 - `docs/mods.md`: installing and making a mod for the three games' desktop builds, what each game gives a mod, and
   an example.
+- `src/board_options.cpp`: the board's two options on the General tab, Board Movement and Map Scrolling, each
+  Original (as on the console, the default) or Fast: their names, values and wording, the same in every game, and what
+  a game's hooks ask of them. Fast board movement walks from space to space in half the time, Fast map scrolling moves
+  the map's view twice as fast.
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
@@ -48,9 +52,10 @@ Anything else the games share comes here when a change needs it in more than one
 
 ## How a game uses it
 
-- `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp`, `src/wipe.cpp` and
-  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width) into the game, with RT64's `include/` on its
-  path.
+- `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp`, `src/wipe.cpp`,
+  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width) and `src/board_options.cpp` into the game,
+  with RT64's `include/` on its path. The game's `src/game/config.cpp` adds the board's options to its General tab
+  (`mp_board_options::add`).
 - `patches/Makefile` compiles `lib/mario-party-engine/patches/*.c` with the game's own patches, against the game's
   decompilation's headers, its `patches/patches.h` and RT64's `include/` (the extended GBI the camera and background
   draw with).
@@ -85,7 +90,8 @@ Anything else the games share comes here when a change needs it in more than one
   `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
 - The game's `us.toml` hooks the sprite manager (with each sprite's width on the screen, from its own layout of a
   sprite) and its board's panels for `src/hud.cpp`, and the wipe module and the end of a frame's last display list for
-  `src/wipe.cpp` (their headers say which functions).
+  `src/wipe.cpp` (their headers say which functions), and where a walk and the map's view take their pace, for
+  `src/board_options.cpp`.
 
 ## Changing it
 
