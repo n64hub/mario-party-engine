@@ -71,8 +71,10 @@
 #define PART_ROWS 24
 #define LINE_WORDS (68 * 2 / 8)
 #define RIGHT_COLUMNS 4
-// How far a map may reach past 4:3's sides, in the screen's pixels, and still leave its picture 4:3.
-#define EDGE 0.5f
+// How far a map may reach past 4:3's sides, in the screen's pixels, and still leave its picture 4:3: a pixel, since
+// Mario Party 2 draws a map of the screen's size half a pixel right of 4:3 (its 3D's viewport centred at 159.5), from
+// 0.5 to 320.5, right on a half pixel's limit, where a float's rounding would decide.
+#define EDGE 1.0f
 #define WIDEST_4X3 (4.0f / 3.0f)
 
 void guOrtho(Mtx* m, f32 l, f32 r, f32 b, f32 t, f32 n, f32 f, f32 scale);
