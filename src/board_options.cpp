@@ -5,9 +5,10 @@
 // Fast board movement takes a walk from one space to the next in half the frames: Mario Party walks a player at twice
 // the speed (38 a frame for 19), Mario Party 2 takes 5 frames a space for 10, and Mario Party 3 reads its own walking
 // speed as Fast (5 frames, its Normal's 10), whatever its pause menu holds, which still shows and saves the player's
-// own. Fast map scrolling doubles the speed the board's camera follows the stick at in the map's view (8 for Mario
-// Party's 4, 7 for 3.5 in the others). The players' community cheat codes for the games do the same by rewriting the
-// game's instructions, which a recompilation has already turned into C.
+// own. Fast map scrolling doubles the speed the board's camera follows the stick at in the map's view (8 for 4 in
+// Mario Party and on Mario Party 3's boards, 7 for 3.5 in Mario Party 2 and on Mario Party 3's duel boards). The
+// players' community cheat codes for the games do the same by rewriting the game's instructions, which a recompilation
+// has already turned into C.
 
 #include <string>
 #include <vector>
