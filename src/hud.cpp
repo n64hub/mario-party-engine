@@ -34,6 +34,11 @@
 //   aligned to the window's edges (gEXSetScissorAlign, then a scissor of the whole screen): the sprite pass's and a
 //   sprite's own scissors stop at 4:3's edges, which would cut off a panel drawn out past them. After the sprite,
 //   both go back to RT64's own and the scissor to the whole screen, the sprite pass's.
+// - mp_hud_sprite_shift, from a game's hook where the function that draws a sprite reads its x for the matrix it
+//   draws a sprite through (two triangles, which RT64's rectangle alignment doesn't move: Mario Party 3's items in a
+//   panel's item select), how far to move that x: as far in the screen's pixels as the alignment moves the
+//   sprite's rectangles, so it is drawn where they would be. 0 for a sprite that isn't aligned. RT64 draws the sprite
+//   pass's 2D through a projection it fits to the window, 4:3 in its middle, so a triangle moved past 4:3 shows there.
 // - mp_hud_sprite_width, from a game's hook just before mp_hud_sprite_start, how wide the sprite is on the screen (its
 //   frame's width by its scale; a game whose hook doesn't say has every sprite drawn as RT64 draws it). One at least as
 //   wide as the screen is a picture behind the scene, and its rectangles are drawn stretched over the window
@@ -105,8 +110,9 @@ namespace {
     Panel panels[PANELS];
     // The player whose hand the game read last, until it sets the hand's group's picture: -1 for none.
     int hand_read = -1;
-    // Whether the sprite being drawn started an alignment.
+    // Whether the sprite being drawn started an alignment, and how far that moves its rectangles, in the screen's pixels.
     bool sprite_aligned = false;
+    float sprite_shift = 0.0f;
     // How wide the next sprite is on the screen, from mp_hud_sprite_width, and whether the one being drawn is a picture
     // as wide as the screen, with an aspect of its own until its end.
     float sprite_width = 0.0f;
@@ -313,12 +319,20 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
         origin = G_EX_ORIGIN_CENTER;
         offset = (int32_t)std::lround(((fraction - 0.5f) * 2.0f * half - fraction * SCREEN_W) * 4.0f);
     }
+    // A rectangle drawn at x is at the window's x origin's fraction of it plus x plus the offset, so in the screen's
+    // pixels, from the 4:3 middle's left edge, the window's own left edge less (wide - SCREEN_W) / 2.
+    float wide = SCREEN_H * picture_aspect();
+    sprite_shift = wide * origin / G_EX_ORIGIN_RIGHT + offset / 4.0f - (wide - SCREEN_W) / 2.0f;
     GfxCommand commands[7];
     gEXEnable(&commands[0]);
     gEXSetRectAlign(&commands[1], origin, origin, offset, 0, offset, 0);
     scissor_to_window(&commands[3]);
     whole_screen(&commands[6]);
     emit(rdram, gfx, commands, 7);
+}
+
+extern "C" float mp_hud_sprite_shift(uint8_t* rdram) {
+    return sprite_aligned ? sprite_shift : 0.0f;
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
@@ -334,6 +348,7 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
         return;
     }
     sprite_aligned = false;
+    sprite_shift = 0.0f;
 
     GfxCommand commands[7];
     gEXEnable(&commands[0]);
