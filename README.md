@@ -26,7 +26,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   at the window's sides, and the camera's view, the HUD and a screen wipe stay inside 4:3 with it. A scene a game's
   patch says is drawn no wider than an aspect past 4:3, a stage whose 3D ends short of a wide window's edges, is drawn
   to the window's edges up to that width, with black only past it.
-- `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges, and a
+- `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges (with
+  their items, those drawn as triangles too, the hand that carries one out and an item flown to another panel), and a
   picture as wide as the screen (a minigame's sky) stretched over the window wherever the game puts it, through hooks
   in the sprite manager, whose code is the decompilations' asm.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
@@ -88,8 +89,8 @@ Anything else the games share comes here when a change needs it in more than one
   values have the same names in every game.
 - The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_widest`), and its
   `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
-- The game's `us.toml` hooks the sprite manager (with each sprite's width on the screen, from its own layout of a
-  sprite) and its board's panels for `src/hud.cpp`, and the wipe module and the end of a frame's last display list for
+- The game's `us.toml` hooks the sprite manager (with each sprite's width and place on the screen, from its own layout
+  of a sprite) and its board's panels for `src/hud.cpp`, and the wipe module and the end of a frame's last display list for
   `src/wipe.cpp` (their headers say which functions), and where a walk and the map's view take their pace, for
   `src/board_options.cpp`.
 
