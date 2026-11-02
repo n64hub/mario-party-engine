@@ -36,6 +36,11 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. In a 4:3
   picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there.
   `src/display_list.h` is what it and `src/hud.cpp` write into a game's display list with.
+- `src/model_ids.cpp`: a 3D model's parts paired with their own between the game's frames, each part's matrix tagged
+  with an ID of its model and its part (gEXMatrixGroup), through hooks in the model walk and the draw of its queue,
+  whose code is the decompilations' asm. RT64 otherwise guesses the pairs among draws that look alike, and paired a
+  character's head with its neighbour's in the frames between the game's (Mario Party 3's opening, as the toy box
+  comes down).
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
@@ -56,7 +61,8 @@ Anything else the games share comes here when a change needs it in more than one
 ## How a game uses it
 
 - `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp`, `src/wipe.cpp`,
-  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width) and `src/board_options.cpp` into the game,
+  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width), `src/board_options.cpp` and `src/model_ids.cpp`
+  (Mario Party 3 so far) into the game,
   with RT64's `include/` on its path. The game's `src/game/config.cpp` adds the board's options to its General tab
   (`mp_board_options::add`).
 - `patches/Makefile` compiles `lib/mario-party-engine/patches/*.c` with the game's own patches, against the game's
@@ -94,7 +100,8 @@ Anything else the games share comes here when a change needs it in more than one
 - The game's `us.toml` hooks the sprite manager (with each sprite's width and place on the screen, from its own layout
   of a sprite) and its board's panels for `src/hud.cpp`, and the wipe module and the end of a frame's last display list for
   `src/wipe.cpp` (their headers say which functions), and where a walk and the map's view take their pace, for
-  `src/board_options.cpp`.
+  `src/board_options.cpp`, and the model walk, its queue and the queue's draw for `src/model_ids.cpp` (its header says
+  where).
 
 ## Changing it
 
