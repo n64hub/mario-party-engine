@@ -9,6 +9,11 @@
 s32 camera_view_widened(s32 left, s32 right);
 // The camera's scissor, to the window's edges for a widened camera.
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom);
+// Whether the last camera's scissor closes the console's overscan border, as a wipe does (sideways, or to a band), and
+// that scissor as gEXSetScissor takes it: its left and right edges' origins, and its edges (left, top, right, bottom)
+// in pixels, the left and right from their origins. Forgotten once asked, so a scene whose camera doesn't come here
+// never sees a wipe that ended in another.
+s32 camera_view_wipe(u16 origins[2], s32 edges[4]);
 // The camera's viewport, perspective normalization and projection, as the game sets them, with a widened camera's
 // viewport kept in the middle. The modelview is the game's own, after this. camera is the game's index of the camera.
 void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm, Mtx* projection, s32 widened);

@@ -21,7 +21,9 @@
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
 //   at the window's sides. A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D
 //   ends short of a wide window's edges) has the scissor that would reach the window's edges stop that far from the
-//   screen's middle (an origin at the window's centre), so its 3D ends there, with black past it.
+//   screen's middle (an origin at the window's centre), so its 3D ends there, with black past it. A scissor that closes
+//   the border, as a wipe does, is kept for board_back.c (camera_view_wipe): on a console the game draws a board's
+//   background under it too, and the wipe takes the board's map away with its 3D.
 // - The viewport. A board pans its 3D by moving its camera's viewport, as large as the map, by as much as it scrolls
 //   the background, and RT64 widens a viewport about the screen's middle: what the viewport moved by was widened too,
 //   so a pan moved the board's spaces and characters a third further than the board under them, and a viewport is
@@ -66,6 +68,11 @@ static Mtx shifted_projections[SHIFTED];
 static Vp centred_viewports[SHIFTED];
 static s32 shifted_index;
 static Vp last_viewports[CAMERAS];
+// The last scissor while it closes the border, as gEXSetScissor takes it: its left and right edges' origins, and its
+// edges (left, top, right, bottom) in pixels, the left and right from their origins.
+static s32 wiping;
+static u16 wipe_origins[2];
+static s32 wipe_edges[4];
 
 // Whether the viewport moved or zoomed further than a pan does since the camera's last frame.
 static s32 cut(s32 camera, Vp* viewport) {
@@ -105,10 +112,38 @@ s32 camera_view_widened(s32 left, s32 right) {
     return ((left == 0) && ((right == SCREEN_W) || (right == SCREEN_LAST))) || border_wipe(left, right);
 }
 
+s32 camera_view_wipe(u16 origins[2], s32 edges[4]) {
+    s32 i, was = wiping;
+
+    wiping = FALSE;
+    for (i = 0; i < 2; i++) {
+        origins[i] = wipe_origins[i];
+    }
+    for (i = 0; i < 4; i++) {
+        edges[i] = wipe_edges[i];
+    }
+    return was;
+}
+
+// The scissor as camera_view_wipe gives it, if it closes the border: inside it and short of it on a side, sideways or
+// to a band.
+static void keep_wipe(s32 left, s32 top, s32 right, s32 bottom, u16 left_origin, s32 left_x, u16 right_origin,
+                      s32 right_x, s32 wipe_top, s32 wipe_bottom) {
+    wiping = (left >= BORDER_LEFT) && (top >= BORDER_TOP) && (right <= BORDER_RIGHT) && (bottom <= BORDER_BOTTOM) &&
+             ((left > BORDER_LEFT) || (top > BORDER_TOP) || (right < BORDER_RIGHT) || (bottom < BORDER_BOTTOM));
+    wipe_origins[0] = left_origin;
+    wipe_origins[1] = right_origin;
+    wipe_edges[0] = left_x;
+    wipe_edges[1] = wipe_top;
+    wipe_edges[2] = right_x;
+    wipe_edges[3] = wipe_bottom;
+}
+
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     u16 left_origin = G_EX_ORIGIN_LEFT;
     u16 right_origin = G_EX_ORIGIN_RIGHT;
     f32 widest = board_back_widest();
+    s32 game_top = top, game_bottom = bottom;
 
     // A closed wipe draws nothing, as the game's own scissor does.
     if (camera_view_widened(left, right) && (left < right) && !board_back_4x3()) {
@@ -128,13 +163,17 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
             s32 right_x = (s32)(width * ((f32)right_origin / G_EX_ORIGIN_RIGHT - 0.5f));
             gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, left_x, top, right_x,
                           bottom);
+            keep_wipe(left, game_top, right, game_bottom, G_EX_ORIGIN_CENTER, left_x, G_EX_ORIGIN_CENTER, right_x, top,
+                      bottom);
             return;
         }
         gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, 0, top, 0, bottom);
+        keep_wipe(left, game_top, right, game_bottom, left_origin, 0, right_origin, 0, top, bottom);
         return;
     }
 
     gDPSetScissor((*gfx)++, G_SC_NON_INTERLACE, left, top, right, bottom);
+    keep_wipe(left, top, right, bottom, G_EX_ORIGIN_NONE, left, G_EX_ORIGIN_NONE, right, top, bottom);
 }
 
 void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm, Mtx* projection, s32 widened) {

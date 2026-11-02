@@ -1,6 +1,7 @@
 #include "patches.h"
 #include "rt64_extended_gbi.h"
 #include "board_back.h"
+#include "camera_view.h"
 
 // A board's background past 4:3, panning with the board's 3D at the display's rate. Each game draws a board's
 // background as a map of 64x48 tiles it streams in from the ROM as the camera moves, the tiles under the camera's
@@ -14,6 +15,13 @@
 //   game gives it for what it draws. A scissor to the window's edges, and black behind the tiles for past the map's own
 //   edges: the game never clears a board's frame (its tiles cover 4:3), so the window's sides would show what an
 //   earlier frame left there.
+// - board_back_end: while a wipe closes the camera's scissor (camera_view_wipe: Mario Party 1's and 2's to a band
+//   between turns, 3's sideways), black past it over the tiles, as on a console, where the game draws them after
+//   setting it: under the window's scissor alone, the board's map stayed in view and only its 3D spaces were wiped
+//   away. The tiles stay under the window's scissor, as RT64 keeps a view whose scissors don't span the frame's width
+//   inside 4:3, so under the wipe's own the map was cut off at 4:3's side. The black is quads in the tiles' own picture,
+//   from where the camera's scissor's edges fall in it out past the window's edges: RT64's rectangles, a fill's or one
+//   through the combiner, stopped a strip short of the window's edges, which showed the map.
 // - board_back_area: the part of the map the game's patch picks the tiles of, under the picture at this frame's view and
 //   every view RT64 draws between the last frame's and it.
 // - board_back_view: the 320x240 picture's projection, kept to its aspect (G_EX_ASPECT_ADJUST, so that the window's
@@ -92,6 +100,9 @@ static s32 list_index;
 static Gfx* list;
 static Vtx* next_corner;
 static Mtx projection;
+// A quarter of a pixel to a unit, for the black past a wipe placed finer than the tiles' pixels.
+static Mtx quarter;
+static s32 quarter_made;
 static Vp viewport = { { { SCREEN_W * 2, SCREEN_H * 2, G_MAXZ / 2, 0 }, { SCREEN_W * 2, SCREEN_H * 2, G_MAXZ / 2, 0 } } };
 // The view the frame before drew at, to tell a cut from a pan.
 static f32 last_left, last_top, last_scale;
@@ -342,7 +353,81 @@ s32 board_back_own_archive(void* bytes) {
     return ((u8*)bytes >= &archives[0][0]) && ((u8*)bytes < &archives[BOARD_BACK_ARCHIVES][0]);
 }
 
+// Where a scissor's edge, origin and offset as gEXSetScissor takes them, falls in the tiles' picture: board_back_view's
+// 320x240 widened as far as the window is, in quarter pixels. An edge with an origin is that fraction across the window,
+// whose middle is the picture's, and its offset is in the picture's pixels; one without is on the 320x240.
+static s32 picture_x(u16 origin, s32 x) {
+    if (origin == G_EX_ORIGIN_NONE) {
+        return x * 4;
+    }
+    return (s32)((SCREEN_W / 2 + ((f32)origin / G_EX_ORIGIN_RIGHT - 0.5f) * SCREEN_H * mp_aspect_ratio() + x) * 4.0f);
+}
+
+static void black_quad(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
+    Vtx* v = next_corner;
+
+    if ((left >= right) || (top >= bottom) || (v + 4 > corners[list_index] + BOARD_BACK_CORNERS)) {
+        return;
+    }
+    next_corner += 4;
+    corner(&v[0], left, top, 0, 0);
+    corner(&v[1], right, top, 0, 0);
+    corner(&v[2], right, bottom, 0, 0);
+    corner(&v[3], left, bottom, 0, 0);
+    gSPVertex((*gfx)++, v, 4, 0);
+    gSP2Triangles((*gfx)++, 0, 1, 2, 0, 0, 2, 3, 0);
+}
+
+// Black past a closing wipe's scissor over the tiles: left of it, right of it, above and below it, out past the window's
+// edges.
+static void black_past(Gfx** gfx, u16 origins[2], s32 edges[4]) {
+    s32 far = SCREEN_W * 4 * 2;
+    s32 left = picture_x(origins[0], edges[0]);
+    s32 right = picture_x(origins[1], edges[2]);
+    s32 top = edges[1] * 4;
+    s32 bottom = edges[3] * 4;
+
+    if (!quarter_made) {
+        f32 m[4][4];
+        s32 i, j;
+
+        for (i = 0; i < 4; i++) {
+            for (j = 0; j < 4; j++) {
+                m[i][j] = (i == j) ? ((i < 2) ? 0.25f : 1.0f) : 0.0f;
+            }
+        }
+        guMtxF2L(m, &quarter);
+        quarter_made = TRUE;
+    }
+    gEXMatrixGroupNoInterpolate((*gfx)++, G_EX_PUSH, G_MTX_MODELVIEW, G_EX_EDIT_NONE);
+    gSPMatrix((*gfx)++, &quarter, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_PUSH);
+    gDPPipeSync((*gfx)++);
+    gEXPushOtherMode((*gfx)++);
+    gEXPushCombineMode((*gfx)++);
+    gEXPushPrimColor((*gfx)++);
+    gDPSetCycleType((*gfx)++, G_CYC_1CYCLE);
+    gDPSetRenderMode((*gfx)++, G_RM_OPA_SURF, G_RM_OPA_SURF2);
+    gDPSetCombineMode((*gfx)++, G_CC_PRIMITIVE, G_CC_PRIMITIVE);
+    gDPSetPrimColor((*gfx)++, 0, 0, 0, 0, 0, 255);
+    black_quad(gfx, -far, 0, left, SCREEN_H * 4);
+    black_quad(gfx, right, 0, SCREEN_W * 4 + far, SCREEN_H * 4);
+    black_quad(gfx, -far, 0, SCREEN_W * 4 + far, top);
+    black_quad(gfx, -far, bottom, SCREEN_W * 4 + far, SCREEN_H * 4);
+    gDPPipeSync((*gfx)++);
+    gEXPopPrimColor((*gfx)++);
+    gEXPopCombineMode((*gfx)++);
+    gEXPopOtherMode((*gfx)++);
+    gSPPopMatrix((*gfx)++, G_MTX_MODELVIEW);
+    gEXPopMatrixGroup((*gfx)++, G_MTX_MODELVIEW);
+}
+
 void board_back_end(Gfx** gfx) {
+    u16 origins[2];
+    s32 edges[4];
+
+    if (camera_view_wipe(origins, edges)) {
+        black_past(gfx, origins, edges);
+    }
     gSPPopMatrix((*gfx)++, G_MTX_MODELVIEW);
     gEXPopMatrixGroup((*gfx)++, G_MTX_MODELVIEW);
     gEXPopMatrixGroup((*gfx)++, G_MTX_PROJECTION);
