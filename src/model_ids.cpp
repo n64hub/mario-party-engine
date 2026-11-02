@@ -9,19 +9,23 @@
 // the toy box down, a frame between the game's drew Yoshi's head on Peach and Wario's on Donkey Kong, and the
 // characters flickered. Tagged, a part is paired by its ID alone, before RT64 guesses for what is left untagged.
 //
-// The engine walks its models (up to 128, each a slot in its table) once a frame, each part's matrix into a queue, then
-// draws the queue sorted by depth, a gSPMatrix (a load into the modelview) before each part's display list. A game's
-// hooks (its us.toml) call these natives, since that code is the decompilations' asm:
-// - mp_model_slot before the walk of a model's parts, with the model's slot and its data (what it draws), and
-//   mp_model_slot_end after it. A slot whose data changed holds another model: its parts' IDs change with it, so the
-//   new model's parts aren't paired with the old one's.
-// - mp_model_queued where a part goes into the queue, with its place in the queue and its part number: the part is
-//   tagged with the model that is being walked. A part queued outside a model's walk (a minigame's own) isn't.
-// - mp_model_draw where the queue starts to be drawn: RT64 reads extended commands only after a gEXEnable in the same
-//   display list, so the first tag after it sends one.
+// The engine walks its models (up to 128, each a slot in its table) once a frame for each camera (up to 6: a screen
+// split between players has one a player), each part's matrix into a queue, then draws the queue sorted by depth, a
+// gSPMatrix (a load into the modelview) before each part's display list. A game's hooks (its us.toml) call these
+// natives, since that code is the decompilations' asm:
+// - mp_model_slot before the walk of a model's parts, with the camera, the model's slot and its data (what it draws),
+//   and mp_model_slot_end after it. A slot whose data changed holds another model: its parts' IDs change with it, so
+//   the new model's parts aren't paired with the old one's. The camera is in the ID too, as each camera draws the same
+//   parts at a matrix of its own.
+// - mp_model_queued where a part goes into the queue, with its place in the queue, its part number and its model: the
+//   part is tagged with the model that is being walked. A part queued outside a model's walk (a minigame's own) isn't,
+//   nor one of another model queued in its walk (a model held at one of its parts, or a part taken from another
+//   model), whose part number is that model's.
 // - mp_model_push just before the part's gSPMatrix, with the list's next command, its place in the queue, its matrix,
-//   the frame's number and the list's start and size: the tag (pushed, G_EX_PUSH) at the list's next command, which
-//   it returns after itself. mp_model_pop after the part's display list, with the list's next-command pointer: the
+//   the frame's number and the list's start and size: the tag (a gEXEnable and the group, pushed, G_EX_PUSH) at the
+//   list's next command, which it returns after itself. RT64 reads extended commands only after a gEXEnable, and
+//   forgets it at each gDPFullSync, which the draw sends between its layers when it splits them into tasks of their
+//   own, so each tag sends one. mp_model_pop after the part's display list, with the list's next-command pointer: the
 //   tag popped. Nothing for an untagged part, or near the end of the list (below).
 //
 // The part is interpolated as RT64 interpolates a matrix it pairs by itself (decomposed, each component its own
@@ -41,10 +45,12 @@
 
 namespace {
     constexpr int32_t SLOTS = 128;
+    constexpr int32_t CAMERAS = 8;
     // The parts of a model told apart, and the queue's places kept.
     constexpr int32_t PARTS = 1 << 12;
     constexpr int32_t QUEUE = 1024;
-    // The IDs' own range, clear of G_EX_ID_IGNORE (0), G_EX_ID_AUTO (all ones) and the engine's other groups.
+    // The IDs' own range, clear of G_EX_ID_IGNORE (0), G_EX_ID_AUTO (all ones) and the engine's other groups: the camera
+    // at bit 26, the slot's generation at 19, the slot at 12 and the part.
     constexpr uint32_t ID_BASE = 0x40000000;
     // Commands a tag takes: a gEXEnable, the group (two) and its pop.
     constexpr int32_t TAG_BYTES = 4 * 8;
@@ -54,11 +60,12 @@ namespace {
     // What each slot last held, and how many times it changed, which goes into its parts' IDs.
     gpr slot_data[SLOTS];
     uint32_t slot_generation[SLOTS];
-    // The model being walked, or -1.
+    // The model being walked (its slot, or -1, its data and the camera).
     int32_t walking = -1;
+    gpr walking_data = 0;
+    uint32_t walking_camera = 0;
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
-    bool enable = false;
     bool pushed = false;
 
     // An ID's matrix's determinant's sign (0 when it collapses what it draws) in the frame it was last drawn.
@@ -106,8 +113,8 @@ namespace {
     }
 }
 
-extern "C" void mp_model_slot(uint8_t*, int32_t slot, gpr data) {
-    if ((slot < 0) || (slot >= SLOTS)) {
+extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) {
+    if ((slot < 0) || (slot >= SLOTS) || (camera < 0) || (camera >= CAMERAS)) {
         walking = -1;
         return;
     }
@@ -116,25 +123,24 @@ extern "C" void mp_model_slot(uint8_t*, int32_t slot, gpr data) {
         slot_generation[slot]++;
     }
     walking = slot;
+    walking_data = data;
+    walking_camera = (uint32_t)camera;
 }
 
 extern "C" void mp_model_slot_end(uint8_t*) {
     walking = -1;
 }
 
-extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part) {
+extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model) {
     if ((place < 0) || (place >= QUEUE)) {
         return;
     }
-    if ((walking < 0) || (part < 0) || (part >= PARTS)) {
+    if ((walking < 0) || (model != walking_data) || (part < 0) || (part >= PARTS)) {
         queued[place] = 0;
         return;
     }
-    queued[place] = ID_BASE | ((slot_generation[walking] & 0x7F) << 19) | ((uint32_t)walking << 12) | (uint32_t)part;
-}
-
-extern "C" void mp_model_draw(uint8_t*) {
-    enable = true;
+    queued[place] = ID_BASE | (walking_camera << 26) | ((slot_generation[walking] & 0x7F) << 19) |
+                    ((uint32_t)walking << 12) | (uint32_t)part;
 }
 
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
@@ -150,10 +156,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     uint8_t component = interpolated(id, determinant_sign(rdram, mtx), frame) ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
     GfxCommand commands[3];
     int count = 0;
-    if (enable) {
-        gEXEnable(&commands[count++]);
-        enable = false;
-    }
+    gEXEnable(&commands[count++]);
     gEXMatrixGroup(&commands[count], id, G_EX_INTERPOLATE_DECOMPOSE, G_EX_PUSH, MODELVIEW, component, component,
                    component, component, component, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO, G_EX_ORDER_LINEAR,
                    G_EX_EDIT_NONE, G_EX_ASPECT_AUTO, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
