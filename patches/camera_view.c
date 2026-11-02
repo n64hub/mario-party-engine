@@ -15,7 +15,12 @@
 //   instead, 32 pixels a frame: the left edge goes across to close it, then the right edge to open it again after the
 //   camera cuts to the next player. A scissor on those steps with one edge at the border's is widened too, each edge as
 //   far across the window as across the border (an origin of that fraction of the window's width), so its 3D keeps its
-//   projection and the wipe crosses the window as it crosses the console's screen. A screen split between players (a
+//   projection and the wipe crosses the window as it crosses the console's screen. RT64 draws a projection's 3D on a
+//   viewport as wide as the window only while the scissors of all it draws under that projection, together, span the
+//   frame's width, so under a sideways wipe's scissor alone the board's spaces and players were squeezed into 4:3 (to
+//   three quarters of their width at 16:9) from the wipe's first step to its last. A triangle of no area, which draws
+//   nothing, goes under the open border's scissor before the wipe's is set: the 3D keeps the window's viewport and is
+//   still cut at the wipe's edge by its own scissor. A screen split between players (a
 //   minigame's halves and quarters, at 160) keeps the game's, and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
@@ -73,6 +78,9 @@ static Vp last_viewports[CAMERAS];
 static s32 wiping;
 static u16 wipe_origins[2];
 static s32 wipe_edges[4];
+// The triangle of no area under a sideways wipe's open border: its one corner in front of the camera, on the identity.
+static Mtx identity = { { { 0x00010000, 0, 0x00000001, 0 }, { 0, 0x00010000, 0, 0x00000001 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 } } };
+static Vtx in_front = { { { 0, 0, -1 }, 0, { 0, 0 }, { 0, 0, 0, 0 } } };
 
 // Whether the viewport moved or zoomed further than a pan does since the camera's last frame.
 static s32 cut(s32 camera, Vp* viewport) {
@@ -139,11 +147,32 @@ static void keep_wipe(s32 left, s32 top, s32 right, s32 bottom, u16 left_origin,
     wipe_edges[3] = wipe_bottom;
 }
 
+// A triangle of no area under the scissor the border has open (its left and right edges' origins and offsets), so that
+// the scissors of the projection it is drawn under span the frame's width.
+static void span_width(Gfx** gfx, u16 left_origin, s32 left_x, u16 right_origin, s32 right_x) {
+    gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, left_x, 0, right_x, SCREEN_H);
+    gDPPipeSync((*gfx)++);
+    gEXPushOtherMode((*gfx)++);
+    gEXPushGeometryMode((*gfx)++);
+    gDPSetCycleType((*gfx)++, G_CYC_1CYCLE);
+    gSPClearGeometryMode((*gfx)++, G_CULL_BOTH);
+    gEXMatrixGroupNoInterpolate((*gfx)++, G_EX_PUSH, G_MTX_MODELVIEW, G_EX_EDIT_NONE);
+    gSPMatrix((*gfx)++, &identity, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_PUSH);
+    gSPVertex((*gfx)++, &in_front, 1, 0);
+    gSP1Triangle((*gfx)++, 0, 0, 0, 0);
+    gSPPopMatrix((*gfx)++, G_MTX_MODELVIEW);
+    gEXPopMatrixGroup((*gfx)++, G_MTX_MODELVIEW);
+    gDPPipeSync((*gfx)++);
+    gEXPopGeometryMode((*gfx)++);
+    gEXPopOtherMode((*gfx)++);
+}
+
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     u16 left_origin = G_EX_ORIGIN_LEFT;
     u16 right_origin = G_EX_ORIGIN_RIGHT;
     f32 widest = board_back_widest();
     s32 game_top = top, game_bottom = bottom;
+    s32 sideways = (left > BORDER_LEFT) || ((left != 0) && (right < BORDER_RIGHT));
 
     // A closed wipe draws nothing, as the game's own scissor does.
     if (camera_view_widened(left, right) && (left < right) && !board_back_4x3()) {
@@ -161,11 +190,17 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
             f32 width = SCREEN_H * widest;
             s32 left_x = (s32)(width * ((f32)left_origin / G_EX_ORIGIN_RIGHT - 0.5f));
             s32 right_x = (s32)(width * ((f32)right_origin / G_EX_ORIGIN_RIGHT - 0.5f));
+            if (sideways) {
+                span_width(gfx, G_EX_ORIGIN_CENTER, (s32)(width * -0.5f), G_EX_ORIGIN_CENTER, (s32)(width * 0.5f));
+            }
             gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, left_x, top, right_x,
                           bottom);
             keep_wipe(left, game_top, right, game_bottom, G_EX_ORIGIN_CENTER, left_x, G_EX_ORIGIN_CENTER, right_x, top,
                       bottom);
             return;
+        }
+        if (sideways) {
+            span_width(gfx, G_EX_ORIGIN_LEFT, 0, G_EX_ORIGIN_RIGHT, 0);
         }
         gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, 0, top, 0, bottom);
         keep_wipe(left, game_top, right, game_bottom, left_origin, 0, right_origin, 0, top, bottom);
