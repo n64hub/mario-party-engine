@@ -25,7 +25,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   board's opening scene), or a scene a game's patch says the game draws at 4:3 (board_back_scene_widest), keeps black
   at the window's sides, and the camera's view, the HUD and a screen wipe stay inside 4:3 with it. A scene a game's
   patch says is drawn no wider than an aspect past 4:3, a stage whose 3D ends short of a wide window's edges, is drawn
-  to the window's edges up to that width, with black only past it.
+  to the window's edges up to that width, with black only past it. The wipe between turns, which closes the board
+  camera's scissor, takes the map away with the 3D, its black out to the window's edges.
 - `src/hud.cpp`: a board's HUD past 4:3, the four players' panels drawn at the window's left and right edges (with
   their items, those drawn as triangles too, the hand that carries one out and an item flown to another panel), and a
   picture as wide as the screen (a minigame's sky) stretched over the window wherever the game puts it, through hooks
