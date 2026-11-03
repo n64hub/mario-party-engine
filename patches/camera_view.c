@@ -28,8 +28,9 @@
 //   one already set: Mario Party 3 calls a list of its own that sets it after the camera's scissor, at the end of the
 //   camera's list every model on the board calls before it is drawn, and its characters and the things on the board
 //   were squeezed into 4:3 under the wipe for it. The game's patch draws the triangle again after that list
-//   (camera_view_span_after). A screen split between players (a minigame's halves and quarters, at 160) keeps the
-//   game's, and so does every camera while the picture is 4:3
+//   (camera_view_span_after), and after the clip ratio its code sets in the main list before it draws the characters
+//   (camera_view_span). A screen split between players (a minigame's halves and quarters, at 160) keeps the game's,
+//   and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
 //   at the window's sides. A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D

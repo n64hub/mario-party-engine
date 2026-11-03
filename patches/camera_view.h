@@ -15,8 +15,8 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom);
 // never sees a wipe that ended in another.
 s32 camera_view_wipe(u16 origins[2], s32 edges[4]);
 // Where the last camera's scissor is a sideways wipe's, the triangle of no area that keeps its 3D on the window's
-// viewport, again: after a list that set a projection or viewport of its own and put the camera's back, which RT64
-// counts as a new projection. The scissor is put back after it.
+// viewport, again: after a list that set a projection or viewport of its own and put the camera's back, or set the clip
+// ratio, which RT64 counts as a new projection. The scissor is put back after it.
 void camera_view_span(Gfx** gfx);
 // Where the last camera's scissor is a sideways wipe's, a list of the game's own that sets what RT64 counts as a new
 // projection (the clip ratio), the triangle again after it, and the display list's end: for a game whose code ends the
