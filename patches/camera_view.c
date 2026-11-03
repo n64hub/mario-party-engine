@@ -22,10 +22,10 @@
 //   nothing, goes under the open border's scissor before the wipe's is set: the 3D keeps the window's viewport and is
 //   still cut at the wipe's edge by its own scissor. RT64 counts a projection or viewport put back as a new one, so
 //   after a board's map, which Mario Party 3 draws once the camera's projection and scissor are set and before the
-//   characters and the things standing on the board, with a projection and viewport of its own (board_back.c), those
-//   were squeezed into 4:3 still: board_back_end draws the triangle again once it has put the camera's back
-//   (camera_view_span).
-//   A screen split between players (a
+//   characters and the things standing on the board, with a projection and viewport of its own (board_back.c), and
+//   then loads the camera's projection again for them without setting its scissor, those were squeezed into 4:3
+//   still: the triangle goes again under every widened camera's projection while the last scissor is a sideways
+//   wipe's, and after board_back_end has put the camera's back (camera_view_span). A screen split between players (a
 //   minigame's halves and quarters, at 160) keeps the game's, and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
@@ -83,8 +83,8 @@ static Vp last_viewports[CAMERAS];
 static s32 wiping;
 static u16 wipe_origins[2];
 static s32 wipe_edges[4];
-// Whether the last camera's scissor had a triangle of no area under the open border, and that border as span_width
-// takes it.
+// Whether the last camera's scissor is a sideways wipe's, with a triangle of no area under the open border, and that
+// border as span_width takes it.
 static s32 spanning;
 static u16 span_origins[2];
 static s32 span_edges[2];
@@ -158,13 +158,14 @@ static void keep_wipe(s32 left, s32 top, s32 right, s32 bottom, u16 left_origin,
 }
 
 // A triangle of no area under the scissor the border has open (its left and right edges' origins and offsets), so that
-// the scissors of the projection it is drawn under span the frame's width.
+// the scissors of the projection it is drawn under span the frame's width. The scissor is put back after it.
 static void span_width(Gfx** gfx, u16 left_origin, s32 left_x, u16 right_origin, s32 right_x) {
     spanning = TRUE;
     span_origins[0] = left_origin;
     span_origins[1] = right_origin;
     span_edges[0] = left_x;
     span_edges[1] = right_x;
+    gEXPushScissor((*gfx)++);
     gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, left_x, 0, right_x, SCREEN_H);
     gDPPipeSync((*gfx)++);
     gEXPushOtherMode((*gfx)++);
@@ -180,6 +181,7 @@ static void span_width(Gfx** gfx, u16 left_origin, s32 left_x, u16 right_origin,
     gDPPipeSync((*gfx)++);
     gEXPopGeometryMode((*gfx)++);
     gEXPopOtherMode((*gfx)++);
+    gEXPopScissor((*gfx)++);
 }
 
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
@@ -230,7 +232,6 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
 void camera_view_span(Gfx** gfx) {
     if (spanning) {
         span_width(gfx, span_origins[0], span_edges[0], span_origins[1], span_edges[1]);
-        spanning = FALSE;
     }
 }
 
@@ -273,4 +274,9 @@ void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm,
                    interpolate, interpolate, interpolate, interpolate, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO,
                    G_EX_ORDER_AUTO, G_EX_EDIT_NONE, aspect, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
     gSPMatrix((*gfx)++, osVirtualToPhysical(projection), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_PROJECTION);
+    // Mario Party 3 draws a board's characters during a sideways wipe under the camera's projection loaded again, with
+    // the scissor the wipe's from before.
+    if (widened) {
+        camera_view_span(gfx);
+    }
 }
