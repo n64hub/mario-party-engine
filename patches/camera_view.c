@@ -20,8 +20,17 @@
 //   frame's width, so under a sideways wipe's scissor alone the board's spaces and players were squeezed into 4:3 (to
 //   three quarters of their width at 16:9) from the wipe's first step to its last. A triangle of no area, which draws
 //   nothing, goes under the open border's scissor before the wipe's is set: the 3D keeps the window's viewport and is
-//   still cut at the wipe's edge by its own scissor. A screen split between players (a
-//   minigame's halves and quarters, at 160) keeps the game's, and so does every camera while the picture is 4:3
+//   still cut at the wipe's edge by its own scissor. RT64 counts a projection or viewport put back as a new one, so
+//   after a board's map, which Mario Party 3 draws once the camera's projection and scissor are set and before the
+//   characters and the things standing on the board, with a projection and viewport of its own (board_back.c), those
+//   were squeezed into 4:3 still: board_back_end draws the triangle again once it has put the camera's back
+//   (camera_view_span). So does a clip ratio (gSPClipRatio), which RT64 counts as a new viewport even when it is the
+//   one already set: Mario Party 3 calls a list of its own that sets it after the camera's scissor, at the end of the
+//   camera's list every model on the board calls before it is drawn, and its characters and the things on the board
+//   were squeezed into 4:3 under the wipe for it. The game's patch draws the triangle again after that list
+//   (camera_view_span_after), and after the clip ratio its code sets in the main list before it draws the characters
+//   (camera_view_span). A screen split between players (a minigame's halves and quarters, at 160) keeps the game's,
+//   and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
 //   at the window's sides. A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D
@@ -78,6 +87,11 @@ static Vp last_viewports[CAMERAS];
 static s32 wiping;
 static u16 wipe_origins[2];
 static s32 wipe_edges[4];
+// Whether the last camera's scissor is a sideways wipe's, with a triangle of no area under the open border, and that
+// border as span_width takes it.
+static s32 spanning;
+static u16 span_origins[2];
+static s32 span_edges[2];
 // The triangle of no area under a sideways wipe's open border: its one corner in front of the camera, on the identity.
 static Mtx identity = { { { 0x00010000, 0, 0x00000001, 0 }, { 0, 0x00010000, 0, 0x00000001 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 } } };
 static Vtx in_front = { { { 0, 0, -1 }, 0, { 0, 0 }, { 0, 0, 0, 0 } } };
@@ -148,8 +162,14 @@ static void keep_wipe(s32 left, s32 top, s32 right, s32 bottom, u16 left_origin,
 }
 
 // A triangle of no area under the scissor the border has open (its left and right edges' origins and offsets), so that
-// the scissors of the projection it is drawn under span the frame's width.
+// the scissors of the projection it is drawn under span the frame's width. The scissor is put back after it.
 static void span_width(Gfx** gfx, u16 left_origin, s32 left_x, u16 right_origin, s32 right_x) {
+    spanning = TRUE;
+    span_origins[0] = left_origin;
+    span_origins[1] = right_origin;
+    span_edges[0] = left_x;
+    span_edges[1] = right_x;
+    gEXPushScissor((*gfx)++);
     gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, left_x, 0, right_x, SCREEN_H);
     gDPPipeSync((*gfx)++);
     gEXPushOtherMode((*gfx)++);
@@ -165,6 +185,7 @@ static void span_width(Gfx** gfx, u16 left_origin, s32 left_x, u16 right_origin,
     gDPPipeSync((*gfx)++);
     gEXPopGeometryMode((*gfx)++);
     gEXPopOtherMode((*gfx)++);
+    gEXPopScissor((*gfx)++);
 }
 
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
@@ -174,6 +195,7 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     s32 game_top = top, game_bottom = bottom;
     s32 sideways = (left > BORDER_LEFT) || ((left != 0) && (right < BORDER_RIGHT));
 
+    spanning = FALSE;
     // A closed wipe draws nothing, as the game's own scissor does.
     if (camera_view_widened(left, right) && (left < right) && !board_back_4x3()) {
         if ((top == BORDER_TOP) && (bottom == BORDER_BOTTOM)) {
@@ -209,6 +231,20 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
 
     gDPSetScissor((*gfx)++, G_SC_NON_INTERLACE, left, top, right, bottom);
     keep_wipe(left, top, right, bottom, G_EX_ORIGIN_NONE, left, G_EX_ORIGIN_NONE, right, top, bottom);
+}
+
+void camera_view_span(Gfx** gfx) {
+    if (spanning) {
+        span_width(gfx, span_origins[0], span_edges[0], span_origins[1], span_edges[1]);
+    }
+}
+
+void camera_view_span_after(Gfx** gfx, Gfx* list) {
+    if (spanning) {
+        gSPDisplayList((*gfx)++, list);
+        camera_view_span(gfx);
+        gSPEndDisplayList((*gfx)++);
+    }
 }
 
 void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm, Mtx* projection, s32 widened) {

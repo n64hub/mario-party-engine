@@ -21,7 +21,9 @@
 //   away. The tiles stay under the window's scissor, as RT64 keeps a view whose scissors don't span the frame's width
 //   inside 4:3, so under the wipe's own the map was cut off at 4:3's side. The black is quads in the tiles' own picture,
 //   from where the camera's scissor's edges fall in it out past the window's edges: RT64's rectangles, a fill's or one
-//   through the combiner, stopped a strip short of the window's edges, which showed the map.
+//   through the combiner, stopped a strip short of the window's edges, which showed the map. With the camera's
+//   projection and viewport put back, which RT64 counts as a new projection, a sideways wipe's triangle of no area
+//   again (camera_view_span), so the 3D the game draws after the map keeps the window's viewport under the wipe.
 // - board_back_area: the part of the map the game's patch picks the tiles of, under the picture at this frame's view and
 //   every view RT64 draws between the last frame's and it.
 // - board_back_view: the 320x240 picture's projection, kept to its aspect (G_EX_ASPECT_ADJUST, so that the window's
@@ -434,6 +436,7 @@ void board_back_end(Gfx** gfx) {
     gEXPopGeometryMode((*gfx)++);
     gEXPopProjectionMatrix((*gfx)++);
     gEXPopViewport((*gfx)++);
+    camera_view_span(gfx);
     gEXPopScissor((*gfx)++);
     gSPEndDisplayList((*gfx)++);
     list_index = (list_index + 1) % LISTS;
