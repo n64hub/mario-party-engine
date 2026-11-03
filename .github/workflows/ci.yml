@@ -1,0 +1,27 @@
+# The engine has no build of its own: Mario Party 1, 2 and 3 are what test it. Each game's CI, called with engine-ref,
+# checks out that game's main, puts lib/mario-party-engine at this commit and runs its own Windows and Linux builds
+# (everything but the ROM-generated sources, no link). A change that needs a game's change too goes red here until that
+# change is on the game's main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mp1:
+    uses: n64hub/mario-party-recomp/.github/workflows/ci.yml@bot/engine-ci-callable-17936524227810000
+    with:
+      engine-ref: ${{ github.sha }}
+  mp2:
+    uses: n64hub/mario-party-2-recomp/.github/workflows/ci.yml@bot/engine-ci-callable-17936524227810000
+    with:
+      engine-ref: ${{ github.sha }}
+  mp3:
+    uses: n64hub/mario-party-3-recomp/.github/workflows/ci.yml@bot/engine-ci-callable-17936524227810000
+    with:
+      engine-ref: ${{ github.sha }}
