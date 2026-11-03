@@ -14,14 +14,14 @@ permissions:
 
 jobs:
   mp1:
-    uses: n64hub/mario-party-recomp/.github/workflows/ci.yml@bot/engine-ci-callable-17936524227810000
+    uses: n64hub/mario-party-recomp/.github/workflows/ci.yml@main
     with:
       engine-ref: ${{ github.sha }}
   mp2:
-    uses: n64hub/mario-party-2-recomp/.github/workflows/ci.yml@bot/engine-ci-callable-17936524227810000
+    uses: n64hub/mario-party-2-recomp/.github/workflows/ci.yml@main
     with:
       engine-ref: ${{ github.sha }}
   mp3:
-    uses: n64hub/mario-party-3-recomp/.github/workflows/ci.yml@bot/engine-ci-callable-17936524227810000
+    uses: n64hub/mario-party-3-recomp/.github/workflows/ci.yml@main
     with:
       engine-ref: ${{ github.sha }}
