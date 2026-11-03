@@ -109,6 +109,10 @@ A change is a commit to `main`, pushed as a fast-forward: the games pin its comm
 game's `lib/mario-party-engine` moves onto it, by a pull request there that builds the game's page and plays it, so a
 change that every game needs moves all three.
 
+This repo's CI builds the three games with `lib/mario-party-engine` at the commit under test, by calling each game's
+own CI on that game's `main` (Windows and Linux, everything but the code generated from the ROM, no link). A change
+that needs a game's change too stays red here until the game's change is on its `main`.
+
 ## License
 
 GPL-3.0, as the recompilations it serves.
