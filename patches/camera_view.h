@@ -18,6 +18,10 @@ s32 camera_view_wipe(u16 origins[2], s32 edges[4]);
 // viewport, again: after a list that set a projection or viewport of its own and put the camera's back, which RT64
 // counts as a new projection. The scissor is put back after it.
 void camera_view_span(Gfx** gfx);
+// Where the last camera's scissor is a sideways wipe's, a list of the game's own that sets what RT64 counts as a new
+// projection (the clip ratio), the triangle again after it, and the display list's end: for a game whose code ends the
+// camera's list with a call of that list after the scissor, which follows these and is never read.
+void camera_view_span_after(Gfx** gfx, Gfx* list);
 // The camera's viewport, perspective normalization and projection, as the game sets them, with a widened camera's
 // viewport kept in the middle. The modelview is the game's own, after this. camera is the game's index of the camera.
 void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm, Mtx* projection, s32 widened);

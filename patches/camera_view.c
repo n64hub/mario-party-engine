@@ -22,11 +22,14 @@
 //   nothing, goes under the open border's scissor before the wipe's is set: the 3D keeps the window's viewport and is
 //   still cut at the wipe's edge by its own scissor. RT64 counts a projection or viewport put back as a new one, so
 //   after a board's map, which Mario Party 3 draws once the camera's projection and scissor are set and before the
-//   characters and the things standing on the board, with a projection and viewport of its own (board_back.c), and
-//   then loads the camera's projection again for them without setting its scissor, those were squeezed into 4:3
-//   still: the triangle goes again under every widened camera's projection while the last scissor is a sideways
-//   wipe's, and after board_back_end has put the camera's back (camera_view_span). A screen split between players (a
-//   minigame's halves and quarters, at 160) keeps the game's, and so does every camera while the picture is 4:3
+//   characters and the things standing on the board, with a projection and viewport of its own (board_back.c), those
+//   were squeezed into 4:3 still: board_back_end draws the triangle again once it has put the camera's back
+//   (camera_view_span). So does a clip ratio (gSPClipRatio), which RT64 counts as a new viewport even when it is the
+//   one already set: Mario Party 3 calls a list of its own that sets it after the camera's scissor, at the end of the
+//   camera's list every model on the board calls before it is drawn, and its characters and the things on the board
+//   were squeezed into 4:3 under the wipe for it. The game's patch draws the triangle again after that list
+//   (camera_view_span_after). A screen split between players (a minigame's halves and quarters, at 160) keeps the
+//   game's, and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
 //   at the window's sides. A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D
@@ -235,6 +238,14 @@ void camera_view_span(Gfx** gfx) {
     }
 }
 
+void camera_view_span_after(Gfx** gfx, Gfx* list) {
+    if (spanning) {
+        gSPDisplayList((*gfx)++, list);
+        camera_view_span(gfx);
+        gSPEndDisplayList((*gfx)++);
+    }
+}
+
 void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm, Mtx* projection, s32 widened) {
     u8 aspect = G_EX_ASPECT_AUTO;
     u8 interpolate = G_EX_COMPONENT_AUTO;
@@ -274,9 +285,4 @@ void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm,
                    interpolate, interpolate, interpolate, interpolate, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO,
                    G_EX_ORDER_AUTO, G_EX_EDIT_NONE, aspect, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
     gSPMatrix((*gfx)++, osVirtualToPhysical(projection), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_PROJECTION);
-    // Mario Party 3 draws a board's characters during a sideways wipe under the camera's projection loaded again, with
-    // the scissor the wipe's from before.
-    if (widened) {
-        camera_view_span(gfx);
-    }
 }
