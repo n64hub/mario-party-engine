@@ -19,7 +19,9 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   process, run one at a time, on the desktop and in a browser alike ([docs/processes.md](docs/processes.md)).
 - `patches/camera_view.c`: a camera's view past 4:3, its scissor to the window's edges and a board's pan moved from
   its viewport into its projection, so the 3D widens without stretching and pans with the board at the display's rate.
-  A game's patches of the two functions that start a camera's view call it.
+  A game's patches of the two functions that start a camera's view call it. In a scene drawn at 4:3, a camera's
+  scissor 8 pixels inside the screen (Mario Party 3's opening), which a TV's overscan hid, is the whole screen's, so
+  its 3D reaches the edges its background picture does.
 - `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
   places on the map, kept to the picture's aspect and moved by an interpolated scroll. A map no wider than 4:3 (a
   board's opening scene), or a scene a game's patch says the game draws at 4:3 (board_back_scene_widest), keeps black

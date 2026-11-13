@@ -65,6 +65,15 @@
 #define BORDER_TOP 12
 #define BORDER_RIGHT 304
 #define BORDER_BOTTOM 228
+// A scissor 8 pixels inside the screen on each side, under a viewport of the whole screen, over a 2D picture of the
+// whole screen: Mario Party 3's opening (opDemoEventSetup), and one of Mario Party 2's overlays (0x48). A TV's overscan
+// hid the 8 pixels; the window shows them, the background's picture there beside the 3D cut short of it. A camera with
+// it is drawn to the screen's edges while the picture is 4:3, as the opening always is (a scene the game's patch says it
+// draws at 4:3); Mario Party 2's overlay, not drawn at 4:3, keeps it.
+#define INSET_LEFT 8
+#define INSET_TOP 8
+#define INSET_RIGHT 312
+#define INSET_BOTTOM 232
 // The step of a sideways wipe's edge across the border, from one edge to the other in 9.
 #define WIPE_STEP 32
 // The projections and viewports of the widened cameras, more than the frames in flight use.
@@ -196,6 +205,13 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     s32 sideways = (left > BORDER_LEFT) || ((left != 0) && (right < BORDER_RIGHT));
 
     spanning = FALSE;
+    if (board_back_4x3() && (left == INSET_LEFT) && (top == INSET_TOP) && (right == INSET_RIGHT) &&
+        (bottom == INSET_BOTTOM)) {
+        left = 0;
+        top = 0;
+        right = SCREEN_W;
+        bottom = SCREEN_H;
+    }
     // A closed wipe draws nothing, as the game's own scissor does.
     if (camera_view_widened(left, right) && (left < right) && !board_back_4x3()) {
         if ((top == BORDER_TOP) && (bottom == BORDER_BOTTOM)) {
