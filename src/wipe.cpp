@@ -28,7 +28,10 @@
 // (G_EX_ASPECT_ADJUST) instead, which puts it on the 4:3 picture where RT64 puts the game's other rectangles
 // (aligned to the screen's centre, its edges would be rounded down to the game's pixels, up to 4 of the window's
 // pixels left of the picture), and mp_wipe_sides adds nothing. Mario Party 3's opening scene fades in from white,
-// and the window's black sides turned grey with it.
+// and the window's black sides turned grey with it. It also draws the rectangle under a scissor of the whole screen
+// (pushed, and popped by mp_wipe_fill_end): Mario Party 3's opening draws its own copy of the fade (opWipeDraw, the
+// Millennium Star's flash of white) under its camera's scissor 8 pixels inside the screen, which a TV's overscan hid,
+// and the flash stopped 8 pixels short of the picture's top and bottom.
 //
 // A shape wipe in a 4:3 picture is all inside 4:3 too. Its rectangles above and below the square run from x 0 to 320,
 // as wide as every scissor of such a frame, and so does its square at its largest, clamped to the screen, so RT64
@@ -99,7 +102,7 @@ namespace {
         gEXSetRectAlign(commands, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
     }
 
-    // Whether mp_wipe_fill_start pushed a scissor, for mp_wipe_fill_end.
+    // Whether mp_wipe_fill_start pushed the wide scissor (a picture wider than 4:3), for mp_wipe_fill_end.
     bool fill_wide = false;
     // Whether mp_wipe_shape_start set the screen's aspect, for mp_wipe_shape_end.
     bool shape_adjusted = false;
@@ -208,10 +211,12 @@ namespace {
 extern "C" void mp_wipe_fill_start(uint8_t* rdram, gpr gfx) {
     fill_wide = !picture_is_4x3();
     if (!fill_wide) {
-        GfxCommand commands[2];
+        GfxCommand commands[4];
         gEXEnable(&commands[0]);
         gEXSetRectAspect(&commands[1], G_EX_ASPECT_ADJUST);
-        emit(rdram, gfx, commands, 2);
+        gEXPushScissor(&commands[2]);
+        whole_screen(&commands[3]);
+        emit(rdram, gfx, commands, 4);
         return;
     }
 
@@ -225,9 +230,10 @@ extern "C" void mp_wipe_fill_start(uint8_t* rdram, gpr gfx) {
 
 extern "C" void mp_wipe_fill_end(uint8_t* rdram, gpr gfx) {
     if (!fill_wide) {
-        GfxCommand command;
-        gEXSetRectAspect(&command, G_EX_ASPECT_AUTO);
-        emit(rdram, gfx, &command, 1);
+        GfxCommand commands[2];
+        gEXSetRectAspect(&commands[0], G_EX_ASPECT_AUTO);
+        gEXPopScissor(&commands[1]);
+        emit(rdram, gfx, commands, 2);
         return;
     }
     fill_wide = false;
