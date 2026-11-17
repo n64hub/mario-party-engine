@@ -36,7 +36,9 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   in the sprite manager, whose code is the decompilations' asm.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. In a 4:3
-  picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there.
+  picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there, and a
+  fade of the whole screen under a scissor of the whole screen (Mario Party 3's opening draws its flash of white under
+  a scissor 8 pixels inside it).
   `src/display_list.h` is what it and `src/hud.cpp` write into a game's display list with.
 - `src/model_ids.cpp`: a 3D model's parts paired with their own between the game's frames, each part's matrix tagged
   with an ID of its model and its part (gEXMatrixGroup), through hooks in the model walk and the draw of its queue,
