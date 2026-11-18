@@ -32,7 +32,21 @@
 // choice), except where its matrix collapses what it draws (a zero determinant: a game hides a part by scaling it to 0)
 // or mirrors it, and didn't in the frame before, or the other way round: there it is drawn at its own matrix, as RT64
 // doesn't pair those (N64Recomp-browser's RT64_SKIP_COLLAPSED_MATCHES), so a part that comes back from 0 isn't drawn
-// growing from nothing over the frames between.
+// growing from nothing over the frames between. So is a part turned more than 75 degrees since the frame before: RT64
+// turns it the short way, and that far in one frame is a game putting it somewhere else, not a turn. Mario Party 3's
+// party setup spins a star drawn as two models at one place, its front and its back half a turn from it, at most 51
+// degrees a frame; to start a spin again it puts the front at -51 degrees and the back, which was at 0, at 129, and the
+// back turned the short way, 64 degrees, stood across the front in the frame between, the BONUS sign on its face
+// showing. Mario Party 1's dice, rolled to pick the turns' order, show another face each frame, a quarter or half turn,
+// and the frames between drew them halfway, two faces at once. The parts of Mario Party 1's opening, menus and first
+// board turn under 60 degrees a frame but for 124 of 268,000, and those (the dice) 80 degrees or more.
+//
+// And a part drawn at its own matrix (new, mirrored or turned far) draws every other part at the same place (its
+// origin within a hundredth of its distance from the eye, the same camera) at its own too, in that frame, those tagged
+// before it (their group rewritten in the list) and after it: what the game draws as one thing in two models stays
+// in one piece. The setup's star, turned face on, swaps its back for the BONUS dial, another model, put there at the
+// front's turn plus half a turn; the dial was drawn at its own turn and the front between its two, 12 degrees apart,
+// and the frame between showed a second outline and the dial's pink rim.
 //
 // Nor is any part where its camera cut to another shot. A part's matrix holds the camera's view (the engine multiplies
 // it in as it walks the model), so a part interpolated across a cut was drawn with the camera partway from one shot to
@@ -79,13 +93,45 @@ namespace {
     uint32_t queued[QUEUE];
     bool pushed = false;
 
-    // An ID's matrix's determinant's sign (0 when it collapses what it draws) in the frame it was last drawn.
-    struct Seen {
-        int32_t frame;
+    // A part's matrix's axes (its first three rows, each made 1 long, or 0) and its determinant's sign (0 where it
+    // collapses what it draws).
+    struct Pose {
+        float axes[3][3];
         int8_t sign;
     };
+    // An ID's pose in the frame it was last drawn.
+    struct Seen {
+        int32_t frame;
+        Pose pose;
+    };
+    // 1 + 2 cos(75 degrees): the trace of a turn of 75 degrees.
+    constexpr float TURN_TRACE = 1.5176f;
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
+
+    // The frame's tags so far: where each part's origin is in its camera's view, where its group command is in the
+    // list, and whether it is drawn at its own matrix.
+    struct Placed {
+        uint32_t id;
+        float origin[3];
+        gpr group;
+        bool own;
+    };
+    constexpr size_t PLACED = 512;
+    Placed placed[PLACED];
+    size_t placed_count = 0;
+    int32_t placed_frame = 0;
+
+    // Whether two origins are one place: within a hundredth of their distance from the eye.
+    bool same_place(const float a[3], const float b[3]) {
+        float d = 0.0f;
+        float r = 0.0f;
+        for (int c = 0; c < 3; c++) {
+            d += (a[c] - b[c]) * (a[c] - b[c]);
+            r = std::fmax(r, std::fmax(std::fabs(a[c]), std::fabs(b[c])));
+        }
+        return std::sqrt(d) <= (r * 0.01f + 0.01f);
+    }
 
     // Each camera's view when it was last set up (its eye in the world, the way it faces and how far the eye moved, in
     // its near plane's distances), and whether it cut to another shot there.
@@ -106,7 +152,7 @@ namespace {
         return (float)(int32_t)(((uint32_t)whole << 16) | fraction) / 65536.0f;
     }
 
-    int8_t determinant_sign(uint8_t* rdram, gpr mtx) {
+    Pose pose(uint8_t* rdram, gpr mtx) {
         float m[3][3];
         for (int r = 0; r < 3; r++) {
             for (int c = 0; c < 3; c++) {
@@ -115,7 +161,27 @@ namespace {
         }
         float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
                     m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-        return (det > 0.0f) ? 1 : ((det < 0.0f) ? -1 : 0);
+        Pose result;
+        result.sign = (det > 0.0f) ? 1 : ((det < 0.0f) ? -1 : 0);
+        for (int r = 0; r < 3; r++) {
+            float length = std::sqrt(m[r][0] * m[r][0] + m[r][1] * m[r][1] + m[r][2] * m[r][2]);
+            for (int c = 0; c < 3; c++) {
+                result.axes[r][c] = (length > 0.0f) ? (m[r][c] / length) : 0.0f;
+            }
+        }
+        return result;
+    }
+
+    // Whether a part turned more than 75 degrees from one pose to the other: the sum of their axes' products is the
+    // trace of the turn between them, 1 + 2 cos(angle).
+    bool turned_far(const Pose& before, const Pose& now) {
+        float trace = 0.0f;
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                trace += before.axes[r][c] * now.axes[r][c];
+            }
+        }
+        return trace < TURN_TRACE;
     }
 
     // Whether the camera cut to another shot since its view before (the header says how it is told). A view that can't
@@ -191,8 +257,9 @@ namespace {
     }
 
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
-    // before, or the other way round. IDs not drawn for a second are forgotten.
-    bool interpolated(uint32_t id, int8_t sign, int32_t frame) {
+    // before, or the other way round, or it turned more than 75 degrees since the frame before. IDs not drawn for a
+    // second are forgotten.
+    bool interpolated(uint32_t id, const Pose& now, int32_t frame, bool& paired) {
         if (frame != seen_frame) {
             if (seen.size() > SLOTS * 64) {
                 for (auto it = seen.begin(); it != seen.end();) {
@@ -202,9 +269,12 @@ namespace {
             seen_frame = frame;
         }
         auto it = seen.find(id);
-        bool same = (it == seen.end()) || (it->second.sign == sign);
-        seen[id] = Seen{ frame, sign };
-        return same && (sign != 0);
+        paired = (it != seen.end()) && (it->second.frame == frame - 1);
+        bool same = (it == seen.end()) ||
+                    ((it->second.pose.sign == now.sign) &&
+                     ((it->second.frame != frame - 1) || !turned_far(it->second.pose, now)));
+        seen[id] = Seen{ frame, now };
+        return same && (now.sign != 0);
     }
 }
 
@@ -248,6 +318,19 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
                     ((uint32_t)walking << 12) | (uint32_t)part;
 }
 
+// The group's two commands at the address: the part interpolated (its components AUTO) or drawn at its own matrix.
+static void group(uint8_t* rdram, gpr at, uint32_t id, bool keep) {
+    uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
+    GfxCommand commands[2];
+    gEXMatrixGroup(&commands[0], id, G_EX_INTERPOLATE_DECOMPOSE, G_EX_PUSH, MODELVIEW, component, component,
+                   component, component, component, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO, G_EX_ORDER_LINEAR,
+                   G_EX_EDIT_NONE, G_EX_ASPECT_AUTO, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
+    for (int i = 0; i < 2; i++) {
+        MEM_W(i * 8, at) = commands[i].values.word0;
+        MEM_W(i * 8 + 4, at) = commands[i].values.word1;
+    }
+}
+
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                               int32_t list_bytes) {
     pushed = false;
@@ -259,19 +342,48 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     uint32_t id = queued[place];
     uint32_t camera = (id >> 26) & (CAMERAS - 1);
-    bool keep = interpolated(id, determinant_sign(rdram, mtx), frame) && !cut[camera];
-    uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
-    GfxCommand commands[3];
-    int count = 0;
-    gEXEnable(&commands[count++]);
-    gEXMatrixGroup(&commands[count], id, G_EX_INTERPOLATE_DECOMPOSE, G_EX_PUSH, MODELVIEW, component, component,
-                   component, component, component, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO, G_EX_ORDER_LINEAR,
-                   G_EX_EDIT_NONE, G_EX_ASPECT_AUTO, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
-    count += 2;
-    for (int i = 0; i < count; i++) {
-        MEM_W(0, at) = commands[i].values.word0;
-        MEM_W(4, at) = commands[i].values.word1;
-        at += 8;
+    Pose now = pose(rdram, mtx);
+    bool paired = false;
+    bool keep = interpolated(id, now, frame, paired) && !cut[camera];
+
+    // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
+    // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
+    if (frame != placed_frame) {
+        placed_count = 0;
+        placed_frame = frame;
+    }
+    Placed here;
+    here.id = id;
+    for (int c = 0; c < 3; c++) {
+        here.origin[c] = element(rdram, mtx, 12 + c);
+    }
+    here.own = (now.sign != 0) && (!keep || !paired);
+    for (size_t i = 0; i < placed_count; i++) {
+        Placed& other = placed[i];
+        if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || (other.own == here.own) ||
+            !same_place(other.origin, here.origin)) {
+            continue;
+        }
+        if (here.own) {
+            other.own = true;
+            group(rdram, other.group, other.id, false);
+        }
+        else {
+            here.own = true;
+            keep = false;
+        }
+    }
+
+    GfxCommand enable;
+    gEXEnable(&enable);
+    MEM_W(0, at) = enable.values.word0;
+    MEM_W(4, at) = enable.values.word1;
+    at += 8;
+    here.group = at;
+    group(rdram, at, id, keep);
+    at += 16;
+    if (placed_count < PLACED) {
+        placed[placed_count++] = here;
     }
     pushed = true;
     return at;

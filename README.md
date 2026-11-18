@@ -47,7 +47,9 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   comes down). A part's ID holds the camera too, as each camera of a screen split between players draws it again. A
   camera that cuts to another shot, told by its view's jump (`mp_model_camera`, which a game's patch calls with the
   camera's view and projection as it sets it up), has its parts drawn at the new shot, not swept partway to it (Mario
-  Party 2's opening).
+  Party 2's opening). So is a part turned more than 75 degrees in a frame, which is the game putting it somewhere,
+  not a turn, and with it every part at its place, so what the game draws as one thing in two models stays in one
+  piece (Mario Party 3's party setup: its spinning star, and the BONUS dial it swaps in for the star's back).
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
