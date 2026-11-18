@@ -57,8 +57,6 @@
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
 #include <cmath>
-#include <cstdio> // DEBUG-TEMP
-#include <cstdlib> // DEBUG-TEMP
 #include <unordered_map>
 
 #include "display_list.h"
@@ -103,6 +101,30 @@ namespace {
     constexpr float TURN_TRACE = 1.5176f;
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
+
+    // The frame's tags so far: where each part's origin is in its camera's view, where its group command is in the
+    // list, and whether it is drawn at its own matrix.
+    struct Placed {
+        uint32_t id;
+        float origin[3];
+        gpr group;
+        bool own;
+    };
+    constexpr size_t PLACED = 512;
+    Placed placed[PLACED];
+    size_t placed_count = 0;
+    int32_t placed_frame = 0;
+
+    // Whether two origins are one place: within a hundredth of their distance from the eye.
+    bool same_place(const float a[3], const float b[3]) {
+        float d = 0.0f;
+        float r = 0.0f;
+        for (int c = 0; c < 3; c++) {
+            d += (a[c] - b[c]) * (a[c] - b[c]);
+            r = std::fmax(r, std::fmax(std::fabs(a[c]), std::fabs(b[c])));
+        }
+        return std::sqrt(d) <= (r * 0.01f + 0.01f);
+    }
 
     // Each camera's view when it was last set up (its eye in the world, the way it faces and how far the eye moved, in
     // its near plane's distances), and whether it cut to another shot there.
@@ -230,7 +252,7 @@ namespace {
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
     // before, or the other way round, or it turned more than 75 degrees since the frame before. IDs not drawn for a
     // second are forgotten.
-    bool interpolated(uint32_t id, const Pose& now, int32_t frame) {
+    bool interpolated(uint32_t id, const Pose& now, int32_t frame, bool& paired) {
         if (frame != seen_frame) {
             if (seen.size() > SLOTS * 64) {
                 for (auto it = seen.begin(); it != seen.end();) {
@@ -240,20 +262,10 @@ namespace {
             seen_frame = frame;
         }
         auto it = seen.find(id);
+        paired = (it != seen.end()) && (it->second.frame == frame - 1);
         bool same = (it == seen.end()) ||
                     ((it->second.pose.sign == now.sign) &&
                      ((it->second.frame != frame - 1) || !turned_far(it->second.pose, now)));
-        { // DEBUG-TEMP
-            static FILE* dbg = []() { const char* p = getenv("MP_MODEL_LOG"); return p ? fopen(p, "w") : (FILE*)nullptr; }();
-            uint32_t s = (id >> 12) & 0x7F;
-            if (dbg && (s >= 44) && (s <= 46)) {
-                float tr = 0.0f;
-                if (it != seen.end()) for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) tr += it->second.pose.axes[r][c] * now.axes[r][c];
-                fprintf(dbg, "f %d id %08x prevf %d sign %d/%d trace %.3f keep %d\n", frame, id, (it != seen.end()) ? it->second.frame : -1,
-                        (it != seen.end()) ? it->second.pose.sign : 9, now.sign, tr, (same && (now.sign != 0)) ? 1 : 0);
-                fflush(dbg);
-            }
-        }
         seen[id] = Seen{ frame, now };
         return same && (now.sign != 0);
     }
@@ -299,6 +311,19 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
                     ((uint32_t)walking << 12) | (uint32_t)part;
 }
 
+// The group's two commands at the address: the part interpolated (its components AUTO) or drawn at its own matrix.
+static void group(uint8_t* rdram, gpr at, uint32_t id, bool keep) {
+    uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
+    GfxCommand commands[2];
+    gEXMatrixGroup(&commands[0], id, G_EX_INTERPOLATE_DECOMPOSE, G_EX_PUSH, MODELVIEW, component, component,
+                   component, component, component, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO, G_EX_ORDER_LINEAR,
+                   G_EX_EDIT_NONE, G_EX_ASPECT_AUTO, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
+    for (int i = 0; i < 2; i++) {
+        MEM_W(i * 8, at) = commands[i].values.word0;
+        MEM_W(i * 8 + 4, at) = commands[i].values.word1;
+    }
+}
+
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                               int32_t list_bytes) {
     pushed = false;
@@ -310,19 +335,49 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     uint32_t id = queued[place];
     uint32_t camera = (id >> 26) & (CAMERAS - 1);
-    bool keep = interpolated(id, pose(rdram, mtx), frame) && !cut[camera];
-    uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
-    GfxCommand commands[3];
-    int count = 0;
-    gEXEnable(&commands[count++]);
-    gEXMatrixGroup(&commands[count], id, G_EX_INTERPOLATE_DECOMPOSE, G_EX_PUSH, MODELVIEW, component, component,
-                   component, component, component, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO, G_EX_ORDER_LINEAR,
-                   G_EX_EDIT_NONE, G_EX_ASPECT_AUTO, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
-    count += 2;
-    for (int i = 0; i < count; i++) {
-        MEM_W(0, at) = commands[i].values.word0;
-        MEM_W(4, at) = commands[i].values.word1;
-        at += 8;
+    Pose now = pose(rdram, mtx);
+    bool paired = false;
+    bool keep = interpolated(id, now, frame, paired) && !cut[camera];
+
+    // A part drawn at its own matrix (new, mirrored or turned far) draws the parts at its place at theirs too, those
+    // tagged before it and after it, in this frame: the halves of one thing (Mario Party 3's star and the BONUS dial the
+    // game puts behind it) stay together, rather than one drawn at its own turn and the other between two.
+    if (frame != placed_frame) {
+        placed_count = 0;
+        placed_frame = frame;
+    }
+    Placed here;
+    here.id = id;
+    for (int c = 0; c < 3; c++) {
+        here.origin[c] = element(rdram, mtx, 12 + c);
+    }
+    here.own = (now.sign != 0) && (!keep || !paired);
+    for (size_t i = 0; i < placed_count; i++) {
+        Placed& other = placed[i];
+        if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || (other.own == here.own) ||
+            !same_place(other.origin, here.origin)) {
+            continue;
+        }
+        if (here.own) {
+            other.own = true;
+            group(rdram, other.group, other.id, false);
+        }
+        else {
+            here.own = true;
+            keep = false;
+        }
+    }
+
+    GfxCommand enable;
+    gEXEnable(&enable);
+    MEM_W(0, at) = enable.values.word0;
+    MEM_W(4, at) = enable.values.word1;
+    at += 8;
+    here.group = at;
+    group(rdram, at, id, keep);
+    at += 16;
+    if (placed_count < PLACED) {
+        placed[placed_count++] = here;
     }
     pushed = true;
     return at;
