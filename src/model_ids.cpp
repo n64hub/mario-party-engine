@@ -188,8 +188,7 @@ namespace {
         bool jumped = known && std::isfinite(step) && std::isfinite(turn) &&
                       ((turn < MAX_TURN_COSINE) || ((step > MIN_JUMP) && (step > last.step * MIN_JUMP_RATIO)));
         if (camera_log != nullptr) {
-            fprintf(camera_log, "cam %d eye %.1f %.1f %.1f fwd %.3f %.3f %.3f near %.2f step %.3f turn %.4f cut %d
-", camera,
+            fprintf(camera_log, "cam %d eye %.1f %.1f %.1f fwd %.3f %.3f %.3f near %.2f step %.3f turn %.4f cut %d\n", camera,
                     eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], near_distance, step, turn, jumped ? 1 : 0);
             fflush(camera_log);
         }
@@ -231,8 +230,7 @@ extern "C" void mp_model_camera(uint8_t* rdram, recomp_context* ctx) {
         camera_log = fopen(getenv("MP_CAMERA_LOG"), "w");
     }
     if (camera_log != nullptr && debug_skipped[camera] > 0) {
-        fprintf(camera_log, "cam %d skipped %d parts
-", camera, debug_skipped[camera]);
+        fprintf(camera_log, "cam %d skipped %d parts\n", camera, debug_skipped[camera]);
         debug_skipped[camera] = 0;
     }
     debug_view[camera] = ctx->r5;
@@ -286,8 +284,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     if (camera_log != nullptr && debug_frame[camera] != frame) {
         debug_frame[camera] = frame;
         if (debug_checksum(rdram, debug_view[camera]) != debug_sum[camera]) {
-            fprintf(camera_log, "cam %d view changed after set up
-", camera);
+            fprintf(camera_log, "cam %d view changed after set up\n", camera);
         }
     }
     if (cut[camera]) {
