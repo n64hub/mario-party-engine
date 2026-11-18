@@ -32,7 +32,12 @@
 // choice), except where its matrix collapses what it draws (a zero determinant: a game hides a part by scaling it to 0)
 // or mirrors it, and didn't in the frame before, or the other way round: there it is drawn at its own matrix, as RT64
 // doesn't pair those (N64Recomp-browser's RT64_SKIP_COLLAPSED_MATCHES), so a part that comes back from 0 isn't drawn
-// growing from nothing over the frames between.
+// growing from nothing over the frames between. So is a part turned more than a quarter turn since the frame before:
+// RT64 turns it the short way, which past a quarter turn is more often a game putting the part somewhere else than a
+// turn that fast. Mario Party 3's party setup spins a star drawn as two models at one place, its front and its back
+// turned half a turn from it, at most about 50 degrees a frame; to start a spin again the game puts the front at -51
+// degrees and the back, which was at 0, at 129, and the back turned the short way, 64 degrees, stood across the front in
+// the frame between, the BONUS sign on its face showing.
 //
 // A game gives each frame's display list a size of its own (each scene sets it), and the tags take room in it, four
 // commands a part: a part whose tag would leave less than a quarter of the list after it is left untagged, for RT64 to
@@ -71,10 +76,16 @@ namespace {
     uint32_t queued[QUEUE];
     bool pushed = false;
 
-    // An ID's matrix's determinant's sign (0 when it collapses what it draws) in the frame it was last drawn.
+    // A part's matrix's axes (its first three rows, each made 1 long, or 0) and its determinant's sign (0 where it
+    // collapses what it draws).
+    struct Pose {
+        float axes[3][3];
+        int8_t sign;
+    };
+    // An ID's pose in the frame it was last drawn.
     struct Seen {
         int32_t frame;
-        int8_t sign;
+        Pose pose;
     };
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
@@ -88,7 +99,7 @@ namespace {
         return (float)(int32_t)((whole << 16) | fraction) / 65536.0f;
     }
 
-    int8_t determinant_sign(uint8_t* rdram, gpr mtx) {
+    Pose pose(uint8_t* rdram, gpr mtx) {
         float m[3][3];
         for (int r = 0; r < 3; r++) {
             for (int c = 0; c < 3; c++) {
@@ -97,12 +108,33 @@ namespace {
         }
         float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
                     m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-        return (det > 0.0f) ? 1 : ((det < 0.0f) ? -1 : 0);
+        Pose result;
+        result.sign = (det > 0.0f) ? 1 : ((det < 0.0f) ? -1 : 0);
+        for (int r = 0; r < 3; r++) {
+            float length = std::sqrt(m[r][0] * m[r][0] + m[r][1] * m[r][1] + m[r][2] * m[r][2]);
+            for (int c = 0; c < 3; c++) {
+                result.axes[r][c] = (length > 0.0f) ? (m[r][c] / length) : 0.0f;
+            }
+        }
+        return result;
+    }
+
+    // Whether a part turned more than a quarter turn from one pose to the other: the sum of their axes' dot products
+    // is the trace of the turn between them, 1 + 2 cos(angle), under 1 past a quarter turn.
+    bool turned_far(const Pose& before, const Pose& now) {
+        float trace = 0.0f;
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                trace += before.axes[r][c] * now.axes[r][c];
+            }
+        }
+        return trace < 1.0f;
     }
 
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
-    // before, or the other way round. IDs not drawn for a second are forgotten.
-    bool interpolated(uint32_t id, int8_t sign, int32_t frame) {
+    // before, or the other way round, or it turned more than a quarter turn since the frame before. IDs not drawn for a
+    // second are forgotten.
+    bool interpolated(uint32_t id, const Pose& now, int32_t frame) {
         if (frame != seen_frame) {
             if (seen.size() > SLOTS * 64) {
                 for (auto it = seen.begin(); it != seen.end();) {
@@ -112,9 +144,11 @@ namespace {
             seen_frame = frame;
         }
         auto it = seen.find(id);
-        bool same = (it == seen.end()) || (it->second.sign == sign);
-        seen[id] = Seen{ frame, sign };
-        return same && (sign != 0);
+        bool same = (it == seen.end()) ||
+                    ((it->second.pose.sign == now.sign) &&
+                     ((it->second.frame != frame - 1) || !turned_far(it->second.pose, now)));
+        seen[id] = Seen{ frame, now };
+        return same && (now.sign != 0);
     }
 }
 
@@ -161,7 +195,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         return at;
     }
     uint32_t id = queued[place];
-    uint8_t component = interpolated(id, determinant_sign(rdram, mtx), frame) ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
+    uint8_t component = interpolated(id, pose(rdram, mtx), frame) ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
     if (dbg_log) {
         fprintf(dbg_log, "P f%d q%d id%08x c%d m", frame, place, id, component);
         for (int i = 0; i < 16; i++) fprintf(dbg_log, " %.3f", element(rdram, mtx, i));
