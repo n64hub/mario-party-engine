@@ -41,6 +41,13 @@
 // and the frames between drew them halfway, two faces at once. The parts of Mario Party 1's opening, menus and first
 // board turn under 60 degrees a frame but for 124 of 268,000, and those (the dice) 80 degrees or more.
 //
+// And a part drawn at its own matrix (new, mirrored or turned far) draws every other part at the same place (its
+// origin within a hundredth of its distance from the eye, the same camera) at its own too, in that frame, those tagged
+// before it (their group rewritten in the list) and after it: what the game draws as one thing in two models stays
+// in one piece. The setup's star, turned face on, swaps its back for the BONUS dial, another model, put there at the
+// front's turn plus half a turn; the dial was drawn at its own turn and the front between its two, 12 degrees apart,
+// and the frame between showed a second outline and the dial's pink rim.
+//
 // Nor is any part where its camera cut to another shot. A part's matrix holds the camera's view (the engine multiplies
 // it in as it walks the model), so a part interpolated across a cut was drawn with the camera partway from one shot to
 // the other, the picture swept for a frame: Mario Party 2's opening cuts from the side of the warp pipe to down its
@@ -339,9 +346,8 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     bool paired = false;
     bool keep = interpolated(id, now, frame, paired) && !cut[camera];
 
-    // A part drawn at its own matrix (new, mirrored or turned far) draws the parts at its place at theirs too, those
-    // tagged before it and after it, in this frame: the halves of one thing (Mario Party 3's star and the BONUS dial the
-    // game puts behind it) stay together, rather than one drawn at its own turn and the other between two.
+    // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
+    // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
     if (frame != placed_frame) {
         placed_count = 0;
         placed_frame = frame;
