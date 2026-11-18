@@ -79,11 +79,13 @@ namespace {
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
 
-    // An element of a Mtx (the N64's fixed point, the integer halves of all sixteen first and then their fractions).
+    // An element of a Mtx (the N64's fixed point, the integer halves of all sixteen first and then their fractions),
+    // signed: the two halves joined as an unsigned word and read back as a signed one, as a negative element read as
+    // unsigned is near 65536 and gives the determinant any sign.
     float element(uint8_t* rdram, gpr mtx, int i) {
-        int32_t whole = (int16_t)MEM_H(i * 2, mtx);
+        uint32_t whole = (uint16_t)MEM_HU(i * 2, mtx);
         uint32_t fraction = (uint16_t)MEM_HU(32 + i * 2, mtx);
-        return (float)((whole << 16) | fraction) / 65536.0f;
+        return (float)(int32_t)((whole << 16) | fraction) / 65536.0f;
     }
 
     int8_t determinant_sign(uint8_t* rdram, gpr mtx) {
