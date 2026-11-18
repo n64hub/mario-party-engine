@@ -99,7 +99,7 @@ namespace {
     float element(uint8_t* rdram, gpr mtx, int i) {
         int32_t whole = (int16_t)MEM_H(i * 2, mtx);
         uint32_t fraction = (uint16_t)MEM_HU(32 + i * 2, mtx);
-        return (float)((whole << 16) | fraction) / 65536.0f;
+        return (float)(int32_t)(((uint32_t)whole << 16) | fraction) / 65536.0f;
     }
 
     int8_t determinant_sign(uint8_t* rdram, gpr mtx) {
