@@ -188,6 +188,11 @@ namespace {
         bool jumped = known && std::isfinite(step) && std::isfinite(turn) &&
                       ((turn < MAX_TURN_COSINE) || ((step > MIN_JUMP) && (step > last.step * MIN_JUMP_RATIO)));
         if (camera_log != nullptr) {
+            fprintf(camera_log, "raw view");
+            for (int i = 0; i < 16; i++) fprintf(camera_log, " %.4f", element(rdram, view, i));
+            fprintf(camera_log, " proj");
+            for (int i = 0; i < 16; i++) fprintf(camera_log, " %.4f", element(rdram, projection, i));
+            fprintf(camera_log, " ptr %08X %08X\n", (uint32_t)view, (uint32_t)projection);
             fprintf(camera_log, "cam %d eye %.1f %.1f %.1f fwd %.3f %.3f %.3f near %.2f step %.3f turn %.4f cut %d\n", camera,
                     eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], near_distance, step, turn, jumped ? 1 : 0);
             fflush(camera_log);
