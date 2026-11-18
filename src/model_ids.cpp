@@ -57,6 +57,8 @@
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
 #include <cmath>
+#include <cstdio> // DEBUG-TEMP
+#include <cstdlib> // DEBUG-TEMP
 #include <unordered_map>
 
 #include "display_list.h"
@@ -241,6 +243,17 @@ namespace {
         bool same = (it == seen.end()) ||
                     ((it->second.pose.sign == now.sign) &&
                      ((it->second.frame != frame - 1) || !turned_far(it->second.pose, now)));
+        { // DEBUG-TEMP
+            static FILE* dbg = []() { const char* p = getenv("MP_MODEL_LOG"); return p ? fopen(p, "w") : (FILE*)nullptr; }();
+            uint32_t s = (id >> 12) & 0x7F;
+            if (dbg && (s >= 44) && (s <= 46)) {
+                float tr = 0.0f;
+                if (it != seen.end()) for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) tr += it->second.pose.axes[r][c] * now.axes[r][c];
+                fprintf(dbg, "f %d id %08x prevf %d sign %d/%d trace %.3f keep %d\n", frame, id, (it != seen.end()) ? it->second.frame : -1,
+                        (it != seen.end()) ? it->second.pose.sign : 9, now.sign, tr, (same && (now.sign != 0)) ? 1 : 0);
+                fflush(dbg);
+            }
+        }
         seen[id] = Seen{ frame, now };
         return same && (now.sign != 0);
     }
