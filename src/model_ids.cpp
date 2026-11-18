@@ -39,6 +39,8 @@
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 
 #include "display_list.h"
