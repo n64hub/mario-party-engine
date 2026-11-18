@@ -76,6 +76,23 @@ namespace {
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
 
+    // Each camera's view when it was last set up (its eye in the world, the way it faces and how far the eye moved, in
+    // its near plane's distances), and whether it cut to another shot there.
+    struct View {
+        bool known;
+        float eye[3];
+        float forward[3];
+        float step;
+    };
+    View views[CAMERAS];
+    bool cut[CAMERAS];
+    // DEBUG: the log of each camera's view, while the thresholds are measured.
+    FILE* camera_log = nullptr;
+    gpr debug_view[CAMERAS];
+    uint32_t debug_sum[CAMERAS];
+    int32_t debug_frame[CAMERAS];
+    int32_t debug_skipped[CAMERAS];
+
     // An element of a Mtx (the N64's fixed point, the integer halves of all sixteen first and then their fractions).
     float element(uint8_t* rdram, gpr mtx, int i) {
         int32_t whole = (int16_t)MEM_H(i * 2, mtx);
