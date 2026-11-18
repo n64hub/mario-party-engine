@@ -42,6 +42,9 @@
 #include <unordered_map>
 
 #include "display_list.h"
+#include <cstdio>
+#include <cstdlib>
+static FILE* dbg_log = [](){ const char* p = getenv("MP_MODEL_LOG"); return p ? fopen(p, "w") : (FILE*)nullptr; }();
 
 namespace {
     constexpr int32_t SLOTS = 128;
@@ -124,6 +127,7 @@ extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) 
     }
     walking = slot;
     walking_data = data;
+    if (dbg_log) fprintf(dbg_log, "S c%d s%d d%08x g%u\n", camera, slot, (uint32_t)data, slot_generation[slot]);
     walking_camera = (uint32_t)camera;
 }
 
@@ -136,9 +140,11 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
         return;
     }
     if ((walking < 0) || (model != walking_data) || (part < 0) || (part >= PARTS)) {
+        if (dbg_log) fprintf(dbg_log, "U q%d p%d m%08x w%d wd%08x\n", place, part, (uint32_t)model, walking, (uint32_t)walking_data);
         queued[place] = 0;
         return;
     }
+    if (dbg_log) fprintf(dbg_log, "Q q%d p%d m%08x w%d\n", place, part, (uint32_t)model, walking);
     queued[place] = ID_BASE | (walking_camera << 26) | ((slot_generation[walking] & 0x7F) << 19) |
                     ((uint32_t)walking << 12) | (uint32_t)part;
 }
@@ -154,6 +160,12 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     uint32_t id = queued[place];
     uint8_t component = interpolated(id, determinant_sign(rdram, mtx), frame) ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
+    if (dbg_log) {
+        fprintf(dbg_log, "P f%d q%d id%08x c%d m", frame, place, id, component);
+        for (int i = 0; i < 16; i++) fprintf(dbg_log, " %.3f", element(rdram, mtx, i));
+        fprintf(dbg_log, "\n");
+        fflush(dbg_log);
+    }
     GfxCommand commands[3];
     int count = 0;
     gEXEnable(&commands[count++]);
