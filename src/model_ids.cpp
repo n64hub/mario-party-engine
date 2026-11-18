@@ -34,13 +34,22 @@
 // doesn't pair those (N64Recomp-browser's RT64_SKIP_COLLAPSED_MATCHES), so a part that comes back from 0 isn't drawn
 // growing from nothing over the frames between.
 //
+// Nor is any part where its camera cut to another shot. A part's matrix holds the camera's view (the engine multiplies
+// it in as it walks the model), so a part interpolated across a cut was drawn with the camera partway from one shot to
+// the other, the picture swept for a frame: Mario Party 2's opening cuts from the side of the warp pipe to down its
+// length, and from the block on the wall back to the pipe, without moving the viewport, where camera_view.c tells a cut.
+// A game's patch calls mp_model_camera as it sets a camera up (its patches/syms.ld names the native), with its view and
+// projection, and the camera cut where its view turned more than 45 degrees, or its eye jumped more than 8 of its near
+// plane's distances and 4 times as far as it moved the frame before, as RT64 tells a cut of a camera with no group of a
+// game's own (RT64_SKIP_CAMERA_CUTS, which can't see this one: the projection holds no view). Mario Party 2's two cuts
+// jump 11.5 near planes after moving under 0.1, and its opening's camera otherwise moves at most 1.5 and turns at most
+// 9 degrees a frame. A game whose patch doesn't call it keeps every camera's parts interpolated, as before.
+//
 // A game gives each frame's display list a size of its own (each scene sets it), and the tags take room in it, four
 // commands a part: a part whose tag would leave less than a quarter of the list after it is left untagged, for RT64 to
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <unordered_map>
 
 #include "display_list.h"
@@ -88,14 +97,9 @@ namespace {
     };
     View views[CAMERAS];
     bool cut[CAMERAS];
-    // DEBUG: the log of each camera's view, while the thresholds are measured.
-    FILE* camera_log = nullptr;
-    gpr debug_view[CAMERAS];
-    uint32_t debug_sum[CAMERAS];
-    int32_t debug_frame[CAMERAS];
-    int32_t debug_skipped[CAMERAS];
 
-    // An element of a Mtx (the N64's fixed point, the integer halves of all sixteen first and then their fractions).
+    // An element of a Mtx (the N64's fixed point, the integer halves of all sixteen first and then their fractions), its
+    // sign kept: put together as a signed whole, as an unsigned fraction made a negative one read near 65536.
     float element(uint8_t* rdram, gpr mtx, int i) {
         int32_t whole = (int16_t)MEM_H(i * 2, mtx);
         uint32_t fraction = (uint16_t)MEM_HU(32 + i * 2, mtx);
@@ -114,19 +118,9 @@ namespace {
         return (det > 0.0f) ? 1 : ((det < 0.0f) ? -1 : 0);
     }
 
-    uint32_t debug_checksum(uint8_t* rdram, gpr mtx) {
-        uint32_t sum = 0;
-        for (int i = 0; i < 16; i++) {
-            sum = sum * 31 + (uint32_t)MEM_W(i * 4, mtx);
-        }
-        return sum;
-    }
-
-    // Whether the camera cut to another shot since its view before: as RT64 tells a cut of a camera with no group of a
-    // game's own (its RT64_SKIP_CAMERA_CUTS), it turned more than 45 degrees, or its eye jumped more than 8 of its near
-    // plane's distances and 4 times as far as it moved the time before. A view that can't be read so (no perspective, a
-    // matrix that can't be inverted) is never a cut, and is forgotten.
-    bool camera_cut(uint8_t* rdram, gpr view, gpr projection, View& last, int32_t camera) {
+    // Whether the camera cut to another shot since its view before (the header says how it is told). A view that can't
+    // be read so (no perspective, a matrix that can't be inverted) is never a cut, and is forgotten.
+    bool camera_cut(uint8_t* rdram, gpr view, gpr projection, View& last) {
         bool known = last.known;
         last.known = false;
 
@@ -187,16 +181,6 @@ namespace {
         constexpr float MIN_JUMP_RATIO = 4.0f;
         bool jumped = known && std::isfinite(step) && std::isfinite(turn) &&
                       ((turn < MAX_TURN_COSINE) || ((step > MIN_JUMP) && (step > last.step * MIN_JUMP_RATIO)));
-        if (camera_log != nullptr) {
-            fprintf(camera_log, "raw view");
-            for (int i = 0; i < 16; i++) fprintf(camera_log, " %.4f", element(rdram, view, i));
-            fprintf(camera_log, " proj");
-            for (int i = 0; i < 16; i++) fprintf(camera_log, " %.4f", element(rdram, projection, i));
-            fprintf(camera_log, " ptr %08X %08X\n", (uint32_t)view, (uint32_t)projection);
-            fprintf(camera_log, "cam %d eye %.1f %.1f %.1f fwd %.3f %.3f %.3f near %.2f step %.3f turn %.4f cut %d\n", camera,
-                    eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], near_distance, step, turn, jumped ? 1 : 0);
-            fflush(camera_log);
-        }
         last.known = true;
         for (int c = 0; c < 3; c++) {
             last.eye[c] = eye[c];
@@ -224,24 +208,14 @@ namespace {
     }
 }
 
-// mp_model_camera(camera, view, projection), a native the patches call as a camera is set up for a frame, with the
-// matrices it draws with.
+// mp_model_camera(camera, view, projection), a native a game's patch calls as it sets a camera up for a frame, with the
+// camera's view and projection: whether the camera cut to another shot, so its models' parts aren't interpolated.
 extern "C" void mp_model_camera(uint8_t* rdram, recomp_context* ctx) {
     int32_t camera = (int32_t)ctx->r4;
     if ((camera < 0) || (camera >= CAMERAS)) {
         return;
     }
-    if ((camera_log == nullptr) && (getenv("MP_CAMERA_LOG") != nullptr)) {
-        camera_log = fopen(getenv("MP_CAMERA_LOG"), "w");
-    }
-    if (camera_log != nullptr && debug_skipped[camera] > 0) {
-        fprintf(camera_log, "cam %d skipped %d parts\n", camera, debug_skipped[camera]);
-        debug_skipped[camera] = 0;
-    }
-    debug_view[camera] = ctx->r5;
-    debug_sum[camera] = debug_checksum(rdram, ctx->r5);
-    debug_frame[camera] = -1;
-    cut[camera] = camera_cut(rdram, ctx->r5, ctx->r6, views[camera], camera);
+    cut[camera] = camera_cut(rdram, ctx->r5, ctx->r6, views[camera]);
 }
 
 extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) {
@@ -285,17 +259,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     uint32_t id = queued[place];
     uint32_t camera = (id >> 26) & (CAMERAS - 1);
-    bool keep = interpolated(id, determinant_sign(rdram, mtx), frame);
-    if (camera_log != nullptr && debug_frame[camera] != frame) {
-        debug_frame[camera] = frame;
-        if (debug_checksum(rdram, debug_view[camera]) != debug_sum[camera]) {
-            fprintf(camera_log, "cam %d view changed after set up\n", camera);
-        }
-    }
-    if (cut[camera]) {
-        keep = false;
-        debug_skipped[camera]++;
-    }
+    bool keep = interpolated(id, determinant_sign(rdram, mtx), frame) && !cut[camera];
     uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
     GfxCommand commands[3];
     int count = 0;
