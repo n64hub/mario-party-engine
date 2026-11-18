@@ -34,6 +34,17 @@
 // doesn't pair those (N64Recomp-browser's RT64_SKIP_COLLAPSED_MATCHES), so a part that comes back from 0 isn't drawn
 // growing from nothing over the frames between.
 //
+// Nor is any part where its camera cut to another shot. A part's matrix holds the camera's view (the engine multiplies
+// it in as it walks the model), so a part interpolated across a cut was drawn with the camera partway from one shot to
+// the other, the picture swept for a frame: Mario Party 2's opening cuts from the side of the warp pipe to down its
+// length, and from the block on the wall back to the pipe, without moving the viewport, where camera_view.c tells a cut.
+// A game's patch calls mp_model_camera as it sets a camera up (its patches/syms.ld names the native), with its view and
+// projection, and the camera cut where its view turned more than 45 degrees, or its eye jumped more than 8 of its near
+// plane's distances and 4 times as far as it moved the frame before, as RT64 tells a cut of a camera with no group of a
+// game's own (RT64_SKIP_CAMERA_CUTS, which can't see this one: the projection holds no view). Mario Party 2's two cuts
+// jump 11.5 near planes after moving under 0.1, and its opening's camera otherwise moves at most 1.5 and turns at most
+// 9 degrees a frame. A game whose patch doesn't call it keeps every camera's parts interpolated, as before.
+//
 // A game gives each frame's display list a size of its own (each scene sets it), and the tags take room in it, four
 // commands a part: a part whose tag would leave less than a quarter of the list after it is left untagged, for RT64 to
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
@@ -76,11 +87,23 @@ namespace {
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
 
-    // An element of a Mtx (the N64's fixed point, the integer halves of all sixteen first and then their fractions).
+    // Each camera's view when it was last set up (its eye in the world, the way it faces and how far the eye moved, in
+    // its near plane's distances), and whether it cut to another shot there.
+    struct View {
+        bool known;
+        float eye[3];
+        float forward[3];
+        float step;
+    };
+    View views[CAMERAS];
+    bool cut[CAMERAS];
+
+    // An element of a Mtx (the N64's fixed point, the integer halves of all sixteen first and then their fractions), its
+    // sign kept: put together as a signed whole, as an unsigned fraction made a negative one read near 65536.
     float element(uint8_t* rdram, gpr mtx, int i) {
         int32_t whole = (int16_t)MEM_H(i * 2, mtx);
         uint32_t fraction = (uint16_t)MEM_HU(32 + i * 2, mtx);
-        return (float)((whole << 16) | fraction) / 65536.0f;
+        return (float)(int32_t)(((uint32_t)whole << 16) | fraction) / 65536.0f;
     }
 
     int8_t determinant_sign(uint8_t* rdram, gpr mtx) {
@@ -93,6 +116,78 @@ namespace {
         float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
                     m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
         return (det > 0.0f) ? 1 : ((det < 0.0f) ? -1 : 0);
+    }
+
+    // Whether the camera cut to another shot since its view before (the header says how it is told). A view that can't
+    // be read so (no perspective, a matrix that can't be inverted) is never a cut, and is forgotten.
+    bool camera_cut(uint8_t* rdram, gpr view, gpr projection, View& last) {
+        bool known = last.known;
+        last.known = false;
+
+        // The near plane's distance, from a perspective that sets w from z (w = z * m23): m32 / (m22 + m23).
+        float m22 = element(rdram, projection, 10);
+        float m23 = element(rdram, projection, 11);
+        float m32 = element(rdram, projection, 14);
+        float near_distance = ((m22 + m23) != 0.0f) ? std::fabs(m32 / (m22 + m23)) : 0.0f;
+        if ((m23 == 0.0f) || !std::isfinite(near_distance) || (near_distance <= 0.0f)) {
+            return false;
+        }
+
+        // The view takes a point of the world v to v R + t (a row vector): the eye is -t R^-1, and the way it faces is
+        // the camera's z axis in the world, R^-1's last row.
+        float m[3][3];
+        float t[3];
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                m[r][c] = element(rdram, view, r * 4 + c);
+            }
+            t[r] = element(rdram, view, 12 + r);
+        }
+        float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        if (!std::isfinite(det) || (det == 0.0f)) {
+            return false;
+        }
+        float inv[3][3] = {
+            { m[1][1] * m[2][2] - m[1][2] * m[2][1], m[0][2] * m[2][1] - m[0][1] * m[2][2], m[0][1] * m[1][2] - m[0][2] * m[1][1] },
+            { m[1][2] * m[2][0] - m[1][0] * m[2][2], m[0][0] * m[2][2] - m[0][2] * m[2][0], m[0][2] * m[1][0] - m[0][0] * m[1][2] },
+            { m[1][0] * m[2][1] - m[1][1] * m[2][0], m[0][1] * m[2][0] - m[0][0] * m[2][1], m[0][0] * m[1][1] - m[0][1] * m[1][0] },
+        };
+        float eye[3];
+        float forward[3];
+        float length = 0.0f;
+        for (int c = 0; c < 3; c++) {
+            eye[c] = -(t[0] * inv[0][c] + t[1] * inv[1][c] + t[2] * inv[2][c]) / det;
+            forward[c] = inv[2][c];
+            length += forward[c] * forward[c];
+        }
+        length = std::sqrt(length);
+        if (!std::isfinite(length) || (length == 0.0f)) {
+            return false;
+        }
+        for (int c = 0; c < 3; c++) {
+            forward[c] /= length;
+        }
+
+        float step = 0.0f;
+        float turn = 1.0f;
+        if (known) {
+            float d[3] = { eye[0] - last.eye[0], eye[1] - last.eye[1], eye[2] - last.eye[2] };
+            step = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) / near_distance;
+            turn = forward[0] * last.forward[0] + forward[1] * last.forward[1] + forward[2] * last.forward[2];
+        }
+        constexpr float MAX_TURN_COSINE = 0.7071f;
+        constexpr float MIN_JUMP = 8.0f;
+        constexpr float MIN_JUMP_RATIO = 4.0f;
+        bool jumped = known && std::isfinite(step) && std::isfinite(turn) &&
+                      ((turn < MAX_TURN_COSINE) || ((step > MIN_JUMP) && (step > last.step * MIN_JUMP_RATIO)));
+        last.known = true;
+        for (int c = 0; c < 3; c++) {
+            last.eye[c] = eye[c];
+            last.forward[c] = forward[c];
+        }
+        last.step = jumped ? 0.0f : step;
+        return jumped;
     }
 
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
@@ -111,6 +206,16 @@ namespace {
         seen[id] = Seen{ frame, sign };
         return same && (sign != 0);
     }
+}
+
+// mp_model_camera(camera, view, projection), a native a game's patch calls as it sets a camera up for a frame, with the
+// camera's view and projection: whether the camera cut to another shot, so its models' parts aren't interpolated.
+extern "C" void mp_model_camera(uint8_t* rdram, recomp_context* ctx) {
+    int32_t camera = (int32_t)ctx->r4;
+    if ((camera < 0) || (camera >= CAMERAS)) {
+        return;
+    }
+    cut[camera] = camera_cut(rdram, ctx->r5, ctx->r6, views[camera]);
 }
 
 extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) {
@@ -153,7 +258,9 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         return at;
     }
     uint32_t id = queued[place];
-    uint8_t component = interpolated(id, determinant_sign(rdram, mtx), frame) ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
+    uint32_t camera = (id >> 26) & (CAMERAS - 1);
+    bool keep = interpolated(id, determinant_sign(rdram, mtx), frame) && !cut[camera];
+    uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
     GfxCommand commands[3];
     int count = 0;
     gEXEnable(&commands[count++]);
