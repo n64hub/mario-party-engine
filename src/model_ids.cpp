@@ -95,6 +95,94 @@ namespace {
         return (det > 0.0f) ? 1 : ((det < 0.0f) ? -1 : 0);
     }
 
+    uint32_t debug_checksum(uint8_t* rdram, gpr mtx) {
+        uint32_t sum = 0;
+        for (int i = 0; i < 16; i++) {
+            sum = sum * 31 + (uint32_t)MEM_W(i * 4, mtx);
+        }
+        return sum;
+    }
+
+    // Whether the camera cut to another shot since its view before: as RT64 tells a cut of a camera with no group of a
+    // game's own (its RT64_SKIP_CAMERA_CUTS), it turned more than 45 degrees, or its eye jumped more than 8 of its near
+    // plane's distances and 4 times as far as it moved the time before. A view that can't be read so (no perspective, a
+    // matrix that can't be inverted) is never a cut, and is forgotten.
+    bool camera_cut(uint8_t* rdram, gpr view, gpr projection, View& last, int32_t camera) {
+        bool known = last.known;
+        last.known = false;
+
+        // The near plane's distance, from a perspective that sets w from z (w = z * m23): m32 / (m22 + m23).
+        float m22 = element(rdram, projection, 10);
+        float m23 = element(rdram, projection, 11);
+        float m32 = element(rdram, projection, 14);
+        float near_distance = ((m22 + m23) != 0.0f) ? std::fabs(m32 / (m22 + m23)) : 0.0f;
+        if ((m23 == 0.0f) || !std::isfinite(near_distance) || (near_distance <= 0.0f)) {
+            return false;
+        }
+
+        // The view takes a point of the world v to v R + t (a row vector): the eye is -t R^-1, and the way it faces is
+        // the camera's z axis in the world, R^-1's last row.
+        float m[3][3];
+        float t[3];
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                m[r][c] = element(rdram, view, r * 4 + c);
+            }
+            t[r] = element(rdram, view, 12 + r);
+        }
+        float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        if (!std::isfinite(det) || (det == 0.0f)) {
+            return false;
+        }
+        float inv[3][3] = {
+            { m[1][1] * m[2][2] - m[1][2] * m[2][1], m[0][2] * m[2][1] - m[0][1] * m[2][2], m[0][1] * m[1][2] - m[0][2] * m[1][1] },
+            { m[1][2] * m[2][0] - m[1][0] * m[2][2], m[0][0] * m[2][2] - m[0][2] * m[2][0], m[0][2] * m[1][0] - m[0][0] * m[1][2] },
+            { m[1][0] * m[2][1] - m[1][1] * m[2][0], m[0][1] * m[2][0] - m[0][0] * m[2][1], m[0][0] * m[1][1] - m[0][1] * m[1][0] },
+        };
+        float eye[3];
+        float forward[3];
+        float length = 0.0f;
+        for (int c = 0; c < 3; c++) {
+            eye[c] = -(t[0] * inv[0][c] + t[1] * inv[1][c] + t[2] * inv[2][c]) / det;
+            forward[c] = inv[2][c];
+            length += forward[c] * forward[c];
+        }
+        length = std::sqrt(length);
+        if (!std::isfinite(length) || (length == 0.0f)) {
+            return false;
+        }
+        for (int c = 0; c < 3; c++) {
+            forward[c] /= length;
+        }
+
+        float step = 0.0f;
+        float turn = 1.0f;
+        if (known) {
+            float d[3] = { eye[0] - last.eye[0], eye[1] - last.eye[1], eye[2] - last.eye[2] };
+            step = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) / near_distance;
+            turn = forward[0] * last.forward[0] + forward[1] * last.forward[1] + forward[2] * last.forward[2];
+        }
+        constexpr float MAX_TURN_COSINE = 0.7071f;
+        constexpr float MIN_JUMP = 8.0f;
+        constexpr float MIN_JUMP_RATIO = 4.0f;
+        bool jumped = known && std::isfinite(step) && std::isfinite(turn) &&
+                      ((turn < MAX_TURN_COSINE) || ((step > MIN_JUMP) && (step > last.step * MIN_JUMP_RATIO)));
+        if (camera_log != nullptr) {
+            fprintf(camera_log, "cam %d eye %.1f %.1f %.1f fwd %.3f %.3f %.3f near %.2f step %.3f turn %.4f cut %d
+", camera,
+                    eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], near_distance, step, turn, jumped ? 1 : 0);
+            fflush(camera_log);
+        }
+        last.known = true;
+        for (int c = 0; c < 3; c++) {
+            last.eye[c] = eye[c];
+            last.forward[c] = forward[c];
+        }
+        last.step = jumped ? 0.0f : step;
+        return jumped;
+    }
+
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
     // before, or the other way round. IDs not drawn for a second are forgotten.
     bool interpolated(uint32_t id, int8_t sign, int32_t frame) {
@@ -111,6 +199,27 @@ namespace {
         seen[id] = Seen{ frame, sign };
         return same && (sign != 0);
     }
+}
+
+// mp_model_camera(camera, view, projection), a native the patches call as a camera is set up for a frame, with the
+// matrices it draws with.
+extern "C" void mp_model_camera(uint8_t* rdram, recomp_context* ctx) {
+    int32_t camera = (int32_t)ctx->r4;
+    if ((camera < 0) || (camera >= CAMERAS)) {
+        return;
+    }
+    if ((camera_log == nullptr) && (getenv("MP_CAMERA_LOG") != nullptr)) {
+        camera_log = fopen(getenv("MP_CAMERA_LOG"), "w");
+    }
+    if (camera_log != nullptr && debug_skipped[camera] > 0) {
+        fprintf(camera_log, "cam %d skipped %d parts
+", camera, debug_skipped[camera]);
+        debug_skipped[camera] = 0;
+    }
+    debug_view[camera] = ctx->r5;
+    debug_sum[camera] = debug_checksum(rdram, ctx->r5);
+    debug_frame[camera] = -1;
+    cut[camera] = camera_cut(rdram, ctx->r5, ctx->r6, views[camera], camera);
 }
 
 extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) {
@@ -153,7 +262,20 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         return at;
     }
     uint32_t id = queued[place];
-    uint8_t component = interpolated(id, determinant_sign(rdram, mtx), frame) ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
+    uint32_t camera = (id >> 26) & (CAMERAS - 1);
+    bool keep = interpolated(id, determinant_sign(rdram, mtx), frame);
+    if (camera_log != nullptr && debug_frame[camera] != frame) {
+        debug_frame[camera] = frame;
+        if (debug_checksum(rdram, debug_view[camera]) != debug_sum[camera]) {
+            fprintf(camera_log, "cam %d view changed after set up
+", camera);
+        }
+    }
+    if (cut[camera]) {
+        keep = false;
+        debug_skipped[camera]++;
+    }
+    uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
     GfxCommand commands[3];
     int count = 0;
     gEXEnable(&commands[count++]);
