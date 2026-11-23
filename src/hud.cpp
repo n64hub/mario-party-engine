@@ -3,7 +3,9 @@
 // console, the way the PC ports of N64 games that widen the picture draw a HUD. A picture at least as wide as the
 // screen (a minigame's sky behind its 3D) is drawn stretched over the whole window wherever the game puts it.
 // Everything else the sprite manager draws (text windows, menus, a minigame's sprites) stays in the 4:3 middle, where
-// RT64 draws a rectangle by default.
+// RT64 draws a rectangle by default. The letters of the game's big messages (a minigame's winner's name and WINS!)
+// stay there too, but reach out to the window's edges: they come in from five times their size, wider than the
+// screen, and their outer letters were cut off at 4:3's edges.
 //
 // A game's hooks (its us.toml) call these natives, since the sprite manager's code is the decompilations' asm:
 // - mp_hud_panel_at where the board sets a player's panel's place (MBStatusPosSet and its kin), with the panel's group
@@ -56,6 +58,17 @@
 //   (G_EX_ASPECT_ADJUST): RT64 by itself would stretch the rectangles of one that covers the scissor's whole width,
 //   only its middle showing between the black at the window's sides and what stands on it no longer on it (Mario
 //   Party 2's Bumper Balloon Cars' sand under the cars).
+// - mp_hud_message_group where the game's message module makes the sprite group of a message's letters (Mario Party's
+//   GMesFontCreate), with the group and its members' offset in it: in a picture wider than 4:3 its letters are drawn
+//   out to the window's edges, under a scissor aligned to them (as a panel's), in the 4:3 middle still. The game
+//   draws such a message from five times its size down to its own (WINS!, after a minigame), its outer letters past
+//   the screen's edges, and cuts a texture rectangle off at x 0 in its own code (gSPScisTextureRectangle), so
+//   mp_hud_sprite_reach, from a game's hook just after mp_hud_sprite_start, moves a message's sprite drawn as
+//   rectangles right by as far as the window reaches past 4:3 (its x, an s16 at the address given, put back by
+//   mp_hud_sprite_end), and aligns its rectangles from the screen's centre as far back left (gEXSetRectAlign): it is
+//   drawn where it was, and cut off at the window's edge, not 4:3's. mp_hud_sprite_left and mp_hud_sprite_right,
+//   from a game's hook where the sprite manager drops a sprite wholly off the screen (its left past 320, its right
+//   before 0), say where the window's edges are in the sprite's x, moved or not, so one in the window's sides is drawn.
 // - recomp_hud_widest, from the engine's patches/board_back.c, the widest the picture is drawn. In a 4:3 picture (a
 //   board's opening scene's map is no wider than 4:3, with black at the window's sides) the panels stay where the game
 //   puts them, inside 4:3 with the scene, rather than out over the black. In a picture drawn no wider than an aspect
@@ -64,6 +77,7 @@
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list, so each start sends one.
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -77,6 +91,14 @@ namespace {
     constexpr int32_t PANEL_HALF = SCREEN_W / 6;
     // A sprite group's count of members, a u16, in every game.
     constexpr int GROUP_COUNT = 0x0A;
+    // How many messages' groups are kept: Mario Party's message module keeps up to 16 groups a message, and two
+    // messages may be up at once.
+    constexpr int MESSAGES = 32;
+    // Half the screen, from its left edge to its centre, where a rectangle aligned to the screen's centre is placed from.
+    constexpr int32_t HALF = SCREEN_W / 2;
+    // The furthest a message's sprite is moved right: a texture rectangle's x (10.2) stops at 1023, and a message's
+    // letter is less than 320 wide.
+    constexpr int32_t REACH_MOST = SCREEN_W;
     // How far in from its corner the game moves a panel before it is drawn wholly in the 4:3 middle: as far as Mario
     // Party 2's 1 VS 3 teams move the lower right panel, 8 in and 2 up (a 2 VS 2 game moves the lower panels 16).
     // Further, that panel stopped half eased, out of line with the panels of its column.
@@ -125,6 +147,15 @@ namespace {
     };
 
     Panel panels[PANELS];
+    // The messages' groups, 0 for none, and their members' offset in a group.
+    gpr messages[MESSAGES];
+    int32_t message_members = 0;
+    int messages_next = 0;
+    // Whether the sprite being drawn is a message's, in a picture wider than 4:3, how far the window reaches past 4:3
+    // on each side, in the screen's pixels, and where its x is if mp_hud_sprite_reach moved it that far (0 for not).
+    bool sprite_message = false;
+    int32_t sprite_reach = 0;
+    gpr sprite_moved = 0;
     // The player whose hand the game read last, until it sets the hand's group's picture: -1 for none.
     int hand_read = -1;
     // Whether the sprite being drawn started an alignment, and how far that moves its rectangles, in the screen's pixels.
@@ -235,6 +266,25 @@ namespace {
         return false;
     }
 
+    // Whether one of the messages' groups has this sprite as a member.
+    bool is_message(uint8_t* rdram, gpr sprite) {
+        for (gpr group : messages) {
+            if ((group != 0) && has_member(rdram, group, message_members, sprite)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // How far the picture reaches past 4:3 on each side, in the screen's pixels, rounded up: to the window's edges, or
+    // to its own in a picture that stops short of them.
+    int32_t reach_past_4x3() {
+        float half = picture_short_half();
+        float wide = (half > 0.0f) ? half * 2.0f : SCREEN_H * picture_aspect();
+        int32_t reach = (int32_t)std::ceil((wide - SCREEN_W) / 2.0f);
+        return std::min(std::max(reach, 0), REACH_MOST);
+    }
+
     // Which panel's group has this sprite as a member, -1 for none, or else which panel's hand's group (hand true).
     int panel_of(uint8_t* rdram, gpr sprite, bool& hand) {
         hand = false;
@@ -307,7 +357,25 @@ extern "C" void mp_hud_hand_group(uint8_t* rdram, gpr group) {
     hand_read = -1;
 }
 
+// mp_hud_message_group(group, members): the sprite group at group, its members' addresses at members bytes into it,
+// holds a message's letters.
+extern "C" void mp_hud_message_group(uint8_t* rdram, gpr group, int32_t members) {
+    message_members = members;
+    for (gpr known : messages) {
+        if (known == group) {
+            return;
+        }
+    }
+    messages[messages_next] = group;
+    messages_next = (messages_next + 1) % MESSAGES;
+}
+
 extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
+    for (gpr& known : messages) {
+        if (known == group) {
+            known = 0;
+        }
+    }
     for (Panel& panel : panels) {
         if (panel.group == group) {
             panel.group = 0;
@@ -320,6 +388,7 @@ extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
 }
 
 extern "C" void mp_hud_reset(uint8_t* rdram) {
+    std::memset(messages, 0, sizeof(messages));
     for (Panel& panel : panels) {
         panel.group = 0;
         panel.hand = 0;
@@ -367,6 +436,18 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
         gEXEnable(&commands[0]);
         gEXSetRectAspect(&commands[1], picture_4x3 ? G_EX_ASPECT_ADJUST : G_EX_ASPECT_STRETCH);
         emit(rdram, gfx, commands, 2);
+        return;
+    }
+
+    // A message's letter, drawn in the 4:3 middle under a scissor of the whole window.
+    sprite_message = !picture_4x3 && is_message(rdram, sprite);
+    if (sprite_message) {
+        sprite_reach = reach_past_4x3();
+        GfxCommand commands[5];
+        gEXEnable(&commands[0]);
+        scissor_to_window(&commands[1]);
+        whole_screen(&commands[4]);
+        emit(rdram, gfx, commands, 5);
         return;
     }
 
@@ -428,6 +509,38 @@ extern "C" float mp_hud_sprite_shift(uint8_t* rdram) {
     return sprite_aligned ? sprite_shift : 0.0f;
 }
 
+// mp_hud_sprite_reach(gfx, x, rects): the sprite mp_hud_sprite_start began has its x, an s16, at x, and is drawn as
+// texture rectangles (rects, not 0) or not.
+extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rects) {
+    if (!sprite_message || (sprite_reach == 0) || (rects == 0)) {
+        return;
+    }
+    MEM_H(0, x) = (int16_t)(MEM_H(0, x) + sprite_reach);
+    sprite_moved = x;
+    // A rectangle drawn at x is at the window's centre plus x plus the offset: back by as far as it was moved, from
+    // the screen's left edge.
+    int32_t offset = -(HALF + sprite_reach) * 4;
+    GfxCommand commands[3];
+    gEXEnable(&commands[0]);
+    gEXSetRectAlign(&commands[1], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, offset, 0, offset, 0);
+    emit(rdram, gfx, commands, 3);
+}
+
+// Where the window's left and right edges are in the x of the sprite being drawn: 0 and 320 but for a message's.
+extern "C" float mp_hud_sprite_left(uint8_t* rdram) {
+    if (!sprite_message) {
+        return 0.0f;
+    }
+    return (sprite_moved != 0) ? 0.0f : (float)-sprite_reach;
+}
+
+extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
+    if (!sprite_message) {
+        return (float)SCREEN_W;
+    }
+    return (float)(SCREEN_W + sprite_reach * ((sprite_moved != 0) ? 2 : 1));
+}
+
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     if (sprite_picture) {
         sprite_picture = false;
@@ -435,6 +548,23 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
         gEXEnable(&commands[0]);
         gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);
         emit(rdram, gfx, commands, 2);
+        return;
+    }
+    if (sprite_message) {
+        sprite_message = false;
+        GfxCommand commands[7];
+        int count = 0;
+        gEXEnable(&commands[count++]);
+        if (sprite_moved != 0) {
+            MEM_H(0, sprite_moved) = (int16_t)(MEM_H(0, sprite_moved) - sprite_reach);
+            sprite_moved = 0;
+            gEXSetRectAlign(&commands[count], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
+            count += 2;
+        }
+        scissor_own(&commands[count]);
+        count += 3;
+        whole_screen(&commands[count++]);
+        emit(rdram, gfx, commands, count);
         return;
     }
     if (!sprite_aligned) {
