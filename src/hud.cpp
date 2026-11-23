@@ -1,9 +1,10 @@
 // A board's HUD at the picture's sides: in a picture wider than 4:3, the four players' panels (each a sprite group of
 // the sprite manager) drawn at the window's left and right edges, as far in from them as they are from 4:3's on a
 // console, the way the PC ports of N64 games that widen the picture draw a HUD. A picture at least as wide as the
-// screen (a minigame's sky behind its 3D) is drawn stretched over the whole window wherever the game puts it.
-// Everything else the sprite manager draws (text windows, menus, a minigame's sprites) stays in the 4:3 middle, where
-// RT64 draws a rectangle by default. The letters of the game's big messages (a minigame's winner's name and WINS!)
+// screen (a minigame's sky behind its 3D) is drawn stretched over the whole window wherever the game puts it. So is a
+// minigame's corner HUD (each player's name and coins, in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) at the
+// window's sides. Everything else the sprite manager draws (text windows, menus, a minigame's other sprites, its timer)
+// stays in the 4:3 middle, where RT64 draws a rectangle by default. The letters of the game's big messages (a minigame's winner's name and WINS!)
 // stay there too, but reach out to the window's edges: they come in from five times their size, wider than the
 // screen, and their outer letters were cut off at 4:3's edges.
 //
@@ -33,9 +34,13 @@
 //   far as the item, so it holds the item from where the panel is drawn to over the character. A game's hook calls
 //   mp_hud_hand_read only for the player whose turn it is, whose item it is: another player's hand (a board's event
 //   at their panel) stays where the game puts it, with the sprites it comes with.
+// - mp_hud_side_sprites where a minigame has made its corner HUD, with where it keeps the indexes of the HUD's basic
+//   sprites (the decompilation's esprite, each a group of the sprite manager) and how many: each is drawn from the
+//   window's edge on the side its x is on, as far in from it as it is from 4:3's, as a panel at its corner. The game
+//   puts them at hardcoded 4:3 places, so in a wider window they sat in its middle, the right ones over the scene.
 // - mp_hud_group_killed where the sprite manager kills a group (HuSprGrpKill), and mp_hud_reset where it starts again
-//   with no groups (its init, which forgets them without killing them), so a group the board's panels or hands used
-//   is forgotten when the board frees them, before the memory goes to another group.
+//   with no groups (its init, which forgets them without killing them), so a group the board's panels or hands, a
+//   message or a corner HUD used is forgotten when it is freed, before the memory goes to another group.
 // - mp_hud_sprite_start and mp_hud_sprite_end around the function that draws one sprite into the display list: for a
 //   panel's sprite, RT64's rectangle alignment to the window's edge (gEXSetRectAlign) and every scissor until the end
 //   aligned to the window's edges (gEXSetScissorAlign, then a scissor of the whole screen): the sprite pass's and a
@@ -112,6 +117,13 @@ namespace {
     constexpr float PANEL_H = 40.0f;
     // How many of the items the board has moved a panel keeps: Mario Party 3's Barter Box flies three at once.
     constexpr int MOVED = 3;
+    // How many groups drawn at a side are kept: a minigame's corner HUD has twenty, five sprites for each player.
+    constexpr int SIDES = 32;
+    // Mario Party's basic sprites (the decompilation's esprite, D_800ED60C): 0x24 bytes each, with the index of its
+    // group in the sprite manager's table an s16 at 4 and its x an s16 at 0x0A.
+    constexpr int BASIC_SIZE = 0x24;
+    constexpr int BASIC_GROUP = 0x04;
+    constexpr int BASIC_X = 0x0A;
 
     enum class Corner {
         // Its place the next time it is drawn.
@@ -147,6 +159,14 @@ namespace {
     };
 
     Panel panels[PANELS];
+    // The groups drawn at a side of the window (mp_hud_side_sprites), 0 for none, with that side: -1 left, 1 right.
+    struct Side {
+        gpr group;
+        int side;
+    };
+    Side sides[SIDES];
+    int32_t side_members = 0;
+    int sides_next = 0;
     // The messages' groups, 0 for none, and their members' offset in a group.
     gpr messages[MESSAGES];
     int32_t message_members = 0;
@@ -276,6 +296,16 @@ namespace {
         return false;
     }
 
+    // The side of the window this sprite's group is drawn at, as mp_hud_side_sprites set: -1 left, 1 right, 0 none.
+    int side_of(uint8_t* rdram, gpr sprite) {
+        for (const Side& known : sides) {
+            if ((known.group != 0) && has_member(rdram, known.group, side_members, sprite)) {
+                return known.side;
+            }
+        }
+        return 0;
+    }
+
     // How far the picture reaches past 4:3 on each side, in the screen's pixels, rounded up: to the window's edges, or
     // to its own in a picture that stops short of them.
     int32_t reach_past_4x3() {
@@ -370,10 +400,51 @@ extern "C" void mp_hud_message_group(uint8_t* rdram, gpr group, int32_t members)
     messages_next = (messages_next + 1) % MESSAGES;
 }
 
+// mp_hud_side_sprites(ids, count, basic, groups, members): count of the game's basic sprites, their indexes s16s at
+// ids, in its basic sprites at basic (laid out as BASIC_SIZE says), each a group in the sprite manager's table of
+// groups' addresses at groups, its members' addresses at members bytes into it. Each is drawn at the side of the
+// window its x (where the game has put it) is on, left or right of the screen's centre.
+extern "C" void mp_hud_side_sprites(uint8_t* rdram, gpr ids, int32_t count, gpr basic, gpr groups, int32_t members) {
+    side_members = members;
+    for (int32_t i = 0; i < count; i++) {
+        int16_t id = (int16_t)MEM_H(i * 2, ids);
+        if (id < 0) {
+            continue;
+        }
+        gpr sprite = basic + id * BASIC_SIZE;
+        int16_t index = (int16_t)MEM_H(BASIC_GROUP, sprite);
+        int16_t x = (int16_t)MEM_H(BASIC_X, sprite);
+        if (index < 0) {
+            continue;
+        }
+        gpr group = (gpr)(int32_t)MEM_W(index * 4, groups);
+        if (group == 0) {
+            continue;
+        }
+        Side* slot = nullptr;
+        for (Side& known : sides) {
+            if (known.group == group) {
+                slot = &known;
+            }
+        }
+        if (slot == nullptr) {
+            slot = &sides[sides_next];
+            sides_next = (sides_next + 1) % SIDES;
+        }
+        slot->group = group;
+        slot->side = (x < HALF) ? -1 : 1;
+    }
+}
+
 extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
     for (gpr& known : messages) {
         if (known == group) {
             known = 0;
+        }
+    }
+    for (Side& known : sides) {
+        if (known.group == group) {
+            known.group = 0;
         }
     }
     for (Panel& panel : panels) {
@@ -389,6 +460,7 @@ extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
 
 extern "C" void mp_hud_reset(uint8_t* rdram) {
     std::memset(messages, 0, sizeof(messages));
+    std::memset(sides, 0, sizeof(sides));
     for (Panel& panel : panels) {
         panel.group = 0;
         panel.hand = 0;
@@ -476,7 +548,14 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
             fraction = panel_fraction(owner, in);
         }
     }
-    sprite_aligned = !picture_4x3 && (panel >= 0) && ((panels[panel].side != 0) || (fraction != 0.5f));
+    // A sprite of a group drawn at a side (a minigame's corner HUD): from that edge of the window, as far in from it as
+    // it is from 4:3's.
+    int side = (panel < 0) ? side_of(rdram, sprite) : 0;
+    if (side != 0) {
+        fraction = (side < 0) ? 0.0f : 1.0f;
+    }
+    sprite_aligned = !picture_4x3 &&
+                     ((side != 0) || ((panel >= 0) && ((panels[panel].side != 0) || (fraction != 0.5f))));
     if (!sprite_aligned) {
         return;
     }
