@@ -33,7 +33,9 @@
 //   and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
-//   at the window's sides. A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D
+//   at the window's sides. A scene whose 3D below the border shows what the console never drew there keeps the border's
+//   bottom (camera_view_border_bottom): Mario Party's Mini-Game Stadium results, whose coin columns go on down through
+//   the podiums they rise from, past the podiums' feet at the border's bottom edge. A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D
 //   ends short of a wide window's edges) has the scissor that would reach the window's edges stop that far from the
 //   screen's middle (an origin at the window's centre), so its 3D ends there, with black past it. A scissor that closes
 //   the border, as a wipe does, is kept for board_back.c (camera_view_wipe): on a console the game draws a board's
@@ -98,6 +100,8 @@ static u16 wipe_origins[2];
 static s32 wipe_edges[4];
 // Whether the last camera's scissor is a sideways wipe's, with a triangle of no area under the open border, and that
 // border as span_width takes it.
+// Whether the scene keeps the border's bottom (camera_view_border_bottom).
+static s32 border_bottom;
 static s32 spanning;
 static u16 span_origins[2];
 static s32 span_edges[2];
@@ -141,6 +145,10 @@ static u16 border_origin(s32 x) {
 
 s32 camera_view_widened(s32 left, s32 right) {
     return ((left == 0) && ((right == SCREEN_W) || (right == SCREEN_LAST))) || border_wipe(left, right);
+}
+
+void camera_view_border_bottom(s32 kept) {
+    border_bottom = kept;
 }
 
 s32 camera_view_wipe(u16 origins[2], s32 edges[4]) {
@@ -216,7 +224,9 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     if (camera_view_widened(left, right) && (left < right) && !board_back_4x3()) {
         if ((top == BORDER_TOP) && (bottom == BORDER_BOTTOM)) {
             top = 0;
-            bottom = SCREEN_H;
+            if (!border_bottom) {
+                bottom = SCREEN_H;
+            }
         }
         if (left != 0) {
             left_origin = border_origin(left);
