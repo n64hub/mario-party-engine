@@ -7,9 +7,9 @@
 // Whether a camera with this scissor is drawn to the window's edges: the whole screen (to 320 or 319), or the console's
 // overscan border (in a sideways wipe across it, too).
 s32 camera_view_widened(s32 left, s32 right);
-// Whether the scene playing keeps the border's bottom edge where a widened camera's scissor is the border, its 3D
-// still reaching the window's top and sides: for a scene whose 3D below that edge shows what the console never drew.
-// A game's patch sets it as each scene starts.
+// Whether the scene playing has its cameras' 3D cut at the console's overscan border's bottom edge, whatever their
+// scissors, the rest of it still out to the window's top and sides: for a scene whose 3D in the screen's bottom lines
+// shows what a TV's overscan hid. A game's patch sets it as each scene starts.
 void camera_view_border_bottom(s32 kept);
 // The camera's scissor, to the window's edges for a widened camera.
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom);
