@@ -50,7 +50,11 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   camera's view and projection as it sets it up), has its parts drawn at the new shot, not swept partway to it (Mario
   Party 2's opening). So is a part turned more than 75 degrees in a frame, which is the game putting it somewhere,
   not a turn, and with it every part at its place, so what the game draws as one thing in two models stays in one
-  piece (Mario Party 3's party setup: its spinning star, and the BONUS dial it swaps in for the star's back).
+  piece (Mario Party 3's party setup: its spinning star, and the BONUS dial it swaps in for the star's back). Where
+  most of a camera's parts turned in a frame, the camera turned, and every part of it is moved partway in the frames
+  between, not put at its new place where it moved far after resting, as RT64 otherwise does: the camera's view is in
+  each part's matrix, so as a camera turned from rest the far parts jumped and the near ones didn't (Mario Party 1's
+  Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table).
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
