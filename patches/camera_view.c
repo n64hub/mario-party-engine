@@ -49,9 +49,15 @@
 //   has its viewport kept in the middle here, and what it was moved by goes into its projection (an off-centre
 //   projection draws the same picture), which RT64 widens as it widens a 3D view (G_EX_ASPECT_ADJUST, on the
 //   projection's group without a group of its own) and interpolates. Any other camera's projection goes back to RT64's
-//   own choice (G_EX_ASPECT_AUTO), which keeps the 3D of a view that covers less than the frame at its own aspect. A
-//   jump of the viewport, as where the board's camera cuts to another place, isn't interpolated, as the background's
-//   scroll isn't (board_back.c).
+//   own choice (G_EX_ASPECT_AUTO), which keeps the 3D of a view that covers less than the frame at its own aspect, and
+//   its viewport is set from the screen's middle (gEXViewport, G_EX_ORIGIN_CENTER), where it draws as the game's own
+//   does. RT64 takes a projection's 3D as covering less than the frame from the scissors of all it draws under it,
+//   together, and only for a viewport without an origin: Mario Party's Desert Dash, split between its teams, draws
+//   something under its right view's projection with a scissor of the whole screen on some frames, and on those that
+//   view was drawn on a viewport as wide as the window, from the window's middle to its right edge, out over the black
+//   past 4:3 at its side (its terrain, rocks and trees at another scale from the frame before), while the left view
+//   kept inside 4:3. A jump of the viewport, as where the board's camera cuts to another place, isn't interpolated, as
+//   the background's scroll isn't (board_back.c).
 //
 // RT64 reads extended commands only after a gEXEnable in the same display list (it forgets it at each list's start),
 // and reads one before as the microcode's own command.
@@ -94,6 +100,9 @@ void guMtxF2L(float mf[4][4], Mtx* m);
 static Mtx shifted_projections[SHIFTED];
 static Vp centred_viewports[SHIFTED];
 static s32 shifted_index;
+// The viewports of the other cameras, from the screen's middle, as many.
+static Vp kept_viewports[SHIFTED];
+static s32 kept_index;
 static Vp last_viewports[CAMERAS];
 // The last scissor while it closes the border, as gEXSetScissor takes it: its left and right edges' origins, and its
 // edges (left, top, right, bottom) in pixels, the left and right from their origins.
@@ -310,9 +319,20 @@ void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm,
         aspect = G_EX_ASPECT_ADJUST;
     }
 
-    gSPViewport((*gfx)++, viewport);
-    gSPPerspNormalize((*gfx)++, persp_norm);
     gEXEnable((*gfx)++);
+    if (aspect == G_EX_ASPECT_ADJUST) {
+        gSPViewport((*gfx)++, viewport);
+    } else {
+        // The same viewport, its x from the screen's middle (gEXViewport adds the middle back), so RT64 never draws it
+        // on a viewport as wide as the window.
+        Vp* kept = &kept_viewports[kept_index];
+
+        kept_index = (kept_index + 1) % SHIFTED;
+        *kept = *viewport;
+        kept->vp.vtrans[0] -= SCREEN_W * 2;
+        gEXViewport((*gfx)++, G_EX_ORIGIN_CENTER, kept);
+    }
+    gSPPerspNormalize((*gfx)++, persp_norm);
     gEXMatrixGroup((*gfx)++, G_EX_ID_AUTO, G_EX_INTERPOLATE_DECOMPOSE, G_EX_NOPUSH, G_MTX_PROJECTION, interpolate,
                    interpolate, interpolate, interpolate, interpolate, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO,
                    G_EX_ORDER_AUTO, G_EX_EDIT_NONE, aspect, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
