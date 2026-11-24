@@ -38,8 +38,10 @@
 //   pass at a half's camera: Desert Dash's right half, in a pass of its own, kept its 3D squeezed to 4:3 but its
 //   scissor the console's, to the window's right edge, and what the game draws past the screen's edge to be cut there
 //   (the ground and a tree beyond the half's right side) showed over the black at the window's right. A half's or a
-//   quarter's camera puts a rectangle under the whole screen's scissor first, below the screen, so the scissor cuts
-//   all of it and it draws nothing, and its pass is the screen's width (split_whole). A scene whose 3D in the screen's
+//   quarter's camera draws a triangle of no area under the whole screen's scissor first, so its pass is the screen's
+//   width (split_whole), under a projection of its own, so the half's own projection isn't widened for it. A
+//   rectangle there instead, cut by the scissor, had RT64 texture the half's 3D with what was drawn before it. A
+//   scene whose 3D in the screen's
 //   bottom lines shows what a TV's overscan hid has it cut at the border's bottom edge (camera_view_border_bottom),
 //   whatever its camera's scissor, the picture behind it showing there: Mario Party's Mini-Game Stadium results, whose
 //   camera draws the whole screen and whose coin columns go on down through the podiums they rise from, past the
@@ -117,6 +119,9 @@ static s32 span_edges[2];
 // The triangle of no area under a sideways wipe's open border: its one corner in front of the camera, on the identity.
 static Mtx identity = { { { 0x00010000, 0, 0x00000001, 0 }, { 0, 0x00010000, 0, 0x00000001 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 } } };
 static Vtx in_front = { { { 0, 0, -1 }, 0, { 0, 0 }, { 0, 0, 0, 0 } } };
+// The triangle of no area under a split screen's whole screen (split_whole): its one corner at the screen's middle,
+// on the identity for its projection as for its model.
+static Vtx at_middle = { { { 0, 0, 0 }, 0, { 0, 0 }, { 0, 0, 0, 0 } } };
 
 // Whether the viewport moved or zoomed further than a pan does since the camera's last frame.
 static s32 cut(s32 camera, Vp* viewport) {
@@ -214,11 +219,32 @@ static void span_width(Gfx** gfx, u16 left_origin, s32 left_x, u16 right_origin,
     gEXPopScissor((*gfx)++);
 }
 
-// A rectangle under the whole screen's scissor, below the screen, which the scissor cuts all of: it draws nothing, and
-// the pass it is drawn in is the screen's width.
+// A triangle of no area under the whole screen's scissor, which draws nothing, so that the pass it is drawn in is the
+// screen's width, under a projection of its own. The scissor and the projection are put back after it.
 static void split_whole(Gfx** gfx) {
+    gEXEnable((*gfx)++);
+    gEXPushScissor((*gfx)++);
     gDPSetScissor((*gfx)++, G_SC_NON_INTERLACE, 0, 0, SCREEN_W, SCREEN_H);
-    gDPFillRectangle((*gfx)++, 0, SCREEN_H, 1, SCREEN_H + 1);
+    gDPPipeSync((*gfx)++);
+    gEXPushOtherMode((*gfx)++);
+    gEXPushGeometryMode((*gfx)++);
+    gDPSetCycleType((*gfx)++, G_CYC_1CYCLE);
+    gSPClearGeometryMode((*gfx)++, G_CULL_BOTH);
+    gEXPushProjectionMatrix((*gfx)++);
+    gEXMatrixGroupNoInterpolate((*gfx)++, G_EX_PUSH, G_MTX_PROJECTION, G_EX_EDIT_NONE);
+    gSPMatrix((*gfx)++, &identity, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH);
+    gEXMatrixGroupNoInterpolate((*gfx)++, G_EX_PUSH, G_MTX_MODELVIEW, G_EX_EDIT_NONE);
+    gSPMatrix((*gfx)++, &identity, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_PUSH);
+    gSPVertex((*gfx)++, &at_middle, 1, 0);
+    gSP1Triangle((*gfx)++, 0, 0, 0, 0);
+    gSPPopMatrix((*gfx)++, G_MTX_MODELVIEW);
+    gEXPopMatrixGroup((*gfx)++, G_MTX_MODELVIEW);
+    gEXPopMatrixGroup((*gfx)++, G_MTX_PROJECTION);
+    gEXPopProjectionMatrix((*gfx)++);
+    gDPPipeSync((*gfx)++);
+    gEXPopGeometryMode((*gfx)++);
+    gEXPopOtherMode((*gfx)++);
+    gEXPopScissor((*gfx)++);
 }
 
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
