@@ -45,7 +45,17 @@
 // across the window, a shape too wide for the colour around it, which mp_wipe_sides drew over the circle at the
 // window's sides: the board cut to 4:3 for the circle's first frame. mp_wipe_square_sides turns the game's texture
 // rectangle into no-ops and draws the whole square instead, aligned to the screen's centre under the wide scissor, its
-// texture where the game's would have it, and the colour only past the square.
+// texture where the game's would have it, and the colour only past the square. A square whose left edge is the screen's
+// (0, the game's square exactly as wide as the screen, halfway through Mario Party 1's star wipe and its Chance Time
+// "!") RT64 stretched the same way, so the shape popped larger for that frame: that one is drawn whole too. What is
+// drawn stops a pixel past the picture's edges, a rectangle's edges being 10 bits of whole pixels.
+//
+// A shape wipe sizes its shape for a 4:3 screen: it closes from a square past the screen's corners and opens to one,
+// and a wider picture's sides were black (or the wipe's colour) while the shape's points were still in 4:3's corners,
+// and snapped off as it opened or on as it closed. mp_wipe_shape_scale, given the shape's size as the wipe module's
+// shape function starts (Mario Party 1's func_8007420C(gfx, size, alpha), the size a float in a general register),
+// makes it as many times larger as the picture is wider than 4:3 (picture_half), so the shape sweeps the whole width.
+// A 4:3 picture's is unchanged.
 //
 // A 4:3 picture's sides are black whatever its scene draws: mp_wipe_picture_sides, where a game ends the last display
 // list of its frame (after its wipe and its text), given the list's next command, fills the window black from past its
@@ -61,7 +71,9 @@
 // In a 4:3 window the rectangles cover nothing past the screen. RT64 reads extended commands only after a gEXEnable in
 // the same display list, so each start sends one.
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "display_list.h"
 
@@ -116,10 +128,22 @@ namespace {
     constexpr uint32_t G_SETCOMBINE = 0xFC;
     constexpr int LOOK_BACK = 32;
 
-    // The whole square from left (negative) to right in place of the game's texture rectangle, which is the square
-    // clamped to the screen from x 0, found back from *gfx with the combine it was drawn with (the one before the
-    // colour's) and made no-ops. The texture is at s at x 0 (S10.5, a step of x dsdx of S5.10's 1024 a texel), so at
-    // left it is left * dsdx / 32 before it. Seven commands, or none if they aren't there.
+    // How far the frame's picture reaches each side of the screen's middle, in the screen's pixels.
+    float picture_half() {
+        if (picture_is_4x3()) {
+            return HALF;
+        }
+        float half = picture_short_half();
+        return (half > 0.0f) ? half : SCREEN_H * picture_aspect() / 2.0f;
+    }
+
+    // The whole square from left (0 or less) to right in place of the game's texture rectangle, which is the square
+    // clamped to the screen from x 0 and y 0, found back from *gfx with the combine it was drawn with (the one before
+    // the colour's) and made no-ops. The texture is at s at x 0 (S10.5, a step of x dsdx of S5.10's 1024 a texel), so
+    // at x it is x * dsdx / 32 on from it. What is drawn stops a pixel past the picture's edges: a rectangle's edges
+    // are 10 bits of whole pixels, and the square of a wipe sized for a picture wider than 2:1 is wider than that.
+    // Its bottom is the screen's, which a square as wide as the screen is past. Seven commands, or none if they aren't
+    // there.
     int whole_square(uint8_t* rdram, gpr gfx, int32_t left, int32_t right, GfxCommand* commands) {
         gpr at = (int32_t)MEM_W(0, gfx);
         gpr rect = 0;
@@ -143,7 +167,9 @@ namespace {
             return 0;
         }
 
-        uint32_t rect0 = (uint32_t)MEM_W(0, rect);
+        int32_t reach = (int32_t)std::ceil(picture_half()) + 1;
+        left = std::max(left, HALF - reach);
+        right = std::min(right, HALF + reach);
         uint32_t rect1 = (uint32_t)MEM_W(4, rect);
         uint32_t coords = (uint32_t)MEM_W(12, rect);
         uint32_t steps = (uint32_t)MEM_W(20, rect);
@@ -159,7 +185,7 @@ namespace {
         // From 0 to its width, placed from the screen's centre at left.
         gEXSetRectAlign(&commands[1], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (left - HALF) * 4, 0, (left - HALF) * 4,
                         0);
-        commands[3].values.word0 = (G_TEXRECT << 24) | ((uint32_t)((right - left) * 4) << 12) | (rect0 & 0xFFF);
+        commands[3].values.word0 = (G_TEXRECT << 24) | ((uint32_t)((right - left) * 4) << 12) | (SCREEN_H * 4);
         commands[3].values.word1 = rect1 & 0x07000FFF;
         commands[4].values.word0 = G_RDPHALF_1 << 24;
         commands[4].values.word1 = ((uint32_t)(s & 0xFFFF) << 16) | (uint32_t)(t & 0xFFFF);
@@ -182,7 +208,7 @@ namespace {
         gEXEnable(&commands[0]);
         push_wide_scissor(&commands[1]);
         int count = 4;
-        int past = (left < 0) ? whole_square(rdram, gfx, left, right, &commands[count]) : 0;
+        int past = (left <= 0) ? whole_square(rdram, gfx, left, right, &commands[count]) : 0;
         count += past;
         if (past == 0) {
             // From WIDE left of 4:3's left edge to it.
@@ -273,6 +299,17 @@ extern "C" void mp_wipe_sides(uint8_t* rdram, gpr gfx) {
 
 extern "C" void mp_wipe_square_sides(uint8_t* rdram, gpr gfx, gpr left, gpr right) {
     sides(rdram, gfx, (int16_t)left, (int16_t)right);
+}
+
+extern "C" gpr mp_wipe_shape_scale(uint8_t* rdram, gpr scale) {
+    // The shape's size, a float in a general register (the function's second argument), as many times larger as the
+    // picture is wider than 4:3.
+    uint32_t bits = (uint32_t)scale;
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    value *= picture_half() / HALF;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return (gpr)(int32_t)bits;
 }
 
 extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
