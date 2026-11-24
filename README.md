@@ -21,7 +21,9 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   its viewport into its projection, so the 3D widens without stretching and pans with the board at the display's rate.
   A game's patches of the two functions that start a camera's view call it. In a scene drawn at 4:3, a camera's
   scissor 8 pixels inside the screen (Mario Party 3's opening), which a TV's overscan hid, is the whole screen's, so
-  its 3D reaches the edges its background picture does.
+  its 3D reaches the edges its background picture does. A scene a game's patch names has its 3D cut at the bottom of the
+  console's overscan border, where its 3D below it shows what a TV's overscan hid (Mario Party's Mini-Game Stadium
+  results, whose coin columns go on down under the podiums to the screen's last line).
 - `patches/board_back.c`: a board's background past 4:3, the tiles a game's patch picks drawn as quads at their
   places on the map, kept to the picture's aspect and moved by an interpolated scroll. A map no wider than 4:3 (a
   board's opening scene), or a scene a game's patch says the game draws at 4:3 (board_back_scene_widest), keeps black
@@ -35,6 +37,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   picture as wide as the screen (a minigame's sky) stretched over the window wherever the game puts it, through hooks
   in the sprite manager, whose code is the decompilations' asm. The letters of the game's big messages (WINS! after a
   minigame), which come in from five times their size, reach out to the window's edges rather than stop at 4:3's.
+  A minigame's corner HUD (each player's name and coins in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) is
+  drawn at the window's sides, as far in from its edges as from 4:3's.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. In a 4:3
   picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there, and a
@@ -112,10 +116,10 @@ Anything else the games share comes here when a change needs it in more than one
 - The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_widest`), and its
   `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
 - The game's `us.toml` hooks the sprite manager (with each sprite's width and place on the screen, from its own layout
-  of a sprite), its board's panels and its message module's letters for `src/hud.cpp`, and the wipe module and the
-  end of a frame's last display list for `src/wipe.cpp` (their headers say which functions), and where a walk and the
-  map's view take their pace, for `src/board_options.cpp`, and the model walk, its queue and the queue's draw for
-  `src/model_ids.cpp` (its header says where).
+  of a sprite), its board's panels, its message module's letters and a minigame's corner HUD for `src/hud.cpp`, and
+  the wipe module and the end of a frame's last display list for `src/wipe.cpp` (their headers say which functions),
+  and where a walk and the map's view take their pace, for `src/board_options.cpp`, and the model walk, its queue and
+  the queue's draw for `src/model_ids.cpp` (its header says where).
 
 ## Changing it
 
