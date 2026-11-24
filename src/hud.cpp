@@ -53,6 +53,16 @@
 //   aligned to the window's edges (gEXSetScissorAlign, then a scissor of the whole screen): the sprite pass's and a
 //   sprite's own scissors stop at 4:3's edges, which would cut off a panel drawn out past them. After the sprite,
 //   both go back to RT64's own and the scissor to the whole screen, the sprite pass's.
+//   For every sprite, mp_hud_sprite_end also joins its strips. The sprite manager draws a frame a few rows at a time,
+//   each strip a texture rectangle of its own rows loaded into TMEM (the whole frame won't fit), and RT64 draws a
+//   magnified one at the window's resolution, filtered: each strip's last row was filtered with only itself, so a
+//   hard line ran across the picture at each join (Mario Party's sky behind a minigame's rules, 160 by 120 drawn at
+//   twice its size, 12 rows at a time: a line every 24 of the screen's 240). Where a strip goes on from the one above
+//   it (the next rows of the same texture, as wide and as magnified, a whole number of quarter pixels a texel), the
+//   one above stops a texel short, the next starts a texel later, and between them the two rows each side of the join
+//   are loaded and drawn over those two texels, filtered as one texture. To make room, its commands drop their syncs
+//   (RT64 has no use for them) and each strip's texture image and tile settings that are the same as those already
+//   set. A sprite whose commands would still not fit in their own place is left as it was.
 // - mp_hud_sprite_shift, from a game's hook where the function that draws a sprite reads its x for the matrix it
 //   draws a sprite through (two triangles, which RT64's rectangle alignment doesn't move: Mario Party 3's items in a
 //   panel's item select), how far to move that x: as far in the screen's pixels as the alignment moves the
@@ -91,7 +101,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "display_list.h"
 
@@ -581,7 +593,225 @@ extern "C" void mp_hud_sprite_at(uint8_t* rdram, float x, float y) {
     sprite_at = true;
 }
 
+namespace {
+    // Where the sprite being drawn starts in the display list, from mp_hud_sprite_start, for join_strips: 0 for none.
+    gpr sprite_start = 0;
+
+    // A display list's command, its two words.
+    struct Command {
+        uint32_t w0, w1;
+    };
+
+    // The most commands a sprite is drawn with that join_strips looks at: a frame of 320 by 240 a few rows at a time
+    // is a few hundred.
+    constexpr int SPRITE_COMMANDS = 2048;
+    // One texel in s10.5, a texture rectangle's coordinates' format.
+    constexpr int32_t TEXEL = 32;
+    // One texel a pixel in s5.10, a texture rectangle's steps' format.
+    constexpr int32_t STEP_ONE = 1 << 10;
+
+    // A texture rectangle of a sprite's (three commands, gSPTextureRectangle): where it is (in quarter pixels), its
+    // texture coordinates (s10.5) and steps (s5.10), and what it is drawn from: the texture image, the load tile's
+    // settings, its own tile's, the last load (a LoadTile, or 0 words after any other) and its tile's size.
+    struct Strip {
+        int index;
+        int tile;
+        int32_t xl, yl, xh, yh;
+        int32_t s, t, dsdx, dtdy;
+        Command image, load_tile, own_tile, load, size;
+    };
+
+    bool same(const Command& a, const Command& b) {
+        return (a.w0 == b.w0) && (a.w1 == b.w1);
+    }
+
+    // A LoadTile's or SetTileSize's first and last row (its top and bottom, 10.2) in whole texels: -1 for a part one.
+    int32_t first_row(const Command& c) {
+        return ((c.w0 & 0xFFF) % 4 == 0) ? (int32_t)(c.w0 & 0xFFF) / 4 : -1;
+    }
+
+    int32_t last_row(const Command& c) {
+        return ((c.w1 & 0xFFF) % 4 == 0) ? (int32_t)(c.w1 & 0xFFF) / 4 : -1;
+    }
+
+    // Its left and right together.
+    uint32_t columns(const Command& c) {
+        return ((c.w0 >> 12) & 0xFFF) | (((c.w1 >> 12) & 0xFFF) << 12);
+    }
+
+    // c with its first and last row these.
+    Command with_rows(const Command& c, int32_t first, int32_t last) {
+        return {(c.w0 & ~0xFFFu) | (uint32_t)(first * 4), (c.w1 & ~0xFFFu) | (uint32_t)(last * 4)};
+    }
+
+    // Whether strip is drawn from rows of its texture a LoadTile put in TMEM, its tile those rows and its texture
+    // coordinates the texture's, at least four rows, so a join can load four rows in their place.
+    bool whole_rows(const Strip& strip) {
+        int32_t first = first_row(strip.load);
+        int32_t last = last_row(strip.load);
+        return ((strip.load.w0 >> 24) == 0xF4) && (strip.image.w0 != 0) && (strip.load_tile.w0 != 0) &&
+               (strip.own_tile.w0 != 0) && (first >= 0) && (last >= first + 3) && (first_row(strip.size) == first) &&
+               (last_row(strip.size) == last) && (columns(strip.size) == columns(strip.load)) &&
+               (strip.t == first * TEXEL);
+    }
+
+    // Where strip b goes on from strip a (the next rows of the same texture, drawn right under it as wide and as
+    // magnified, a whole number of quarter pixels a texel), how tall one texel is drawn, in quarter pixels: 0 where
+    // it doesn't.
+    int32_t join_height(const Strip& a, const Strip& b) {
+        if ((a.tile != b.tile) || (a.xl != b.xl) || (a.xh != b.xh) || (a.yh != b.yl) || (a.s != b.s) ||
+            (a.dsdx != b.dsdx) || (a.dtdy != b.dtdy) || (a.dtdy <= 0) || (a.dtdy >= STEP_ONE) ||
+            ((4 * STEP_ONE) % a.dtdy != 0)) {
+            return 0;
+        }
+        int32_t height = (4 * STEP_ONE) / a.dtdy;
+        // How far a's texture coordinate goes down it, in s5.10 by quarter pixels: in s10.5, 128 times less.
+        int32_t drawn = (a.yh - a.yl) * a.dtdy;
+        if (((a.yh - a.yl) <= 2 * height) || ((b.yh - b.yl) <= 2 * height) || (drawn % 128 != 0) ||
+            (a.t + drawn / 128 != b.t) || !same(a.image, b.image) || !same(a.load_tile, b.load_tile) ||
+            !same(a.own_tile, b.own_tile) || (columns(a.load) != columns(b.load)) || !whole_rows(a) ||
+            !whole_rows(b) || (last_row(a.load) + 1 != first_row(b.load))) {
+            return 0;
+        }
+        return height;
+    }
+
+    // The sprite's commands from start to *gfx with each join of its strips drawn from one texture: see the header.
+    // Left as they are where no strips join, or where the commands that would replace them don't fit in their place.
+    void join_strips(uint8_t* rdram, gpr gfx, gpr start) {
+        gpr end = (int32_t)MEM_W(0, gfx);
+        if ((start == 0) || (end <= start) || ((end - start) / 8 > SPRITE_COMMANDS)) {
+            return;
+        }
+        int count = (end - start) / 8;
+        std::vector<Command> commands(count);
+        for (int i = 0; i < count; i++) {
+            commands[i] = {(uint32_t)MEM_W(i * 8, start), (uint32_t)MEM_W(i * 8 + 4, start)};
+        }
+
+        // The texture rectangles, and what each is drawn from.
+        std::vector<Strip> strips;
+        Command image{}, tiles[8]{}, sizes[8]{}, load{};
+        for (int i = 0; i < count; i++) {
+            const Command& c = commands[i];
+            switch (c.w0 >> 24) {
+                case 0xFD:
+                    image = c;
+                    break;
+                case 0xF5:
+                    tiles[(c.w1 >> 24) & 7] = c;
+                    break;
+                case 0xF2:
+                    sizes[(c.w1 >> 24) & 7] = c;
+                    break;
+                case 0xF4:
+                    load = c;
+                    break;
+                case 0xF3:
+                case 0xF0:
+                    load = {};
+                    break;
+                case 0xE4:
+                    if ((i + 2 < count) && ((commands[i + 1].w0 >> 24) == 0xE1) &&
+                        ((commands[i + 2].w0 >> 24) == 0xF1)) {
+                        Strip strip;
+                        strip.index = i;
+                        strip.tile = (c.w1 >> 24) & 7;
+                        strip.xh = (c.w0 >> 12) & 0xFFF;
+                        strip.yh = c.w0 & 0xFFF;
+                        strip.xl = (c.w1 >> 12) & 0xFFF;
+                        strip.yl = c.w1 & 0xFFF;
+                        strip.s = (int16_t)(commands[i + 1].w1 >> 16);
+                        strip.t = (int16_t)(commands[i + 1].w1 & 0xFFFF);
+                        strip.dsdx = (int16_t)(commands[i + 2].w1 >> 16);
+                        strip.dtdy = (int16_t)(commands[i + 2].w1 & 0xFFFF);
+                        strip.image = image;
+                        strip.load_tile = tiles[(load.w1 >> 24) & 7];
+                        strip.own_tile = tiles[strip.tile];
+                        strip.load = load;
+                        strip.size = sizes[strip.tile];
+                        strips.push_back(strip);
+                        i += 2;
+                    }
+                    break;
+            }
+        }
+        // Each strip's join with the next: one texel's height, 0 for none.
+        std::vector<int32_t> joins(strips.size(), 0);
+        bool any = false;
+        for (size_t k = 0; k + 1 < strips.size(); k++) {
+            joins[k] = join_height(strips[k], strips[k + 1]);
+            any = any || (joins[k] != 0);
+        }
+        if (!any) {
+            return;
+        }
+
+        // The commands again, without the syncs (RT64 has no use for them) or a texture image or tile's settings the
+        // same as those already set (each strip sets them again), which makes room for the joins.
+        std::vector<Command> out;
+        out.reserve(count);
+        Command set_image{}, set_tiles[8]{};
+        size_t next = 0;
+        for (int i = 0; i < count; i++) {
+            const Command& c = commands[i];
+            uint32_t op = c.w0 >> 24;
+            if ((op == 0xE6) || (op == 0xE7) || (op == 0xE8)) {
+                continue;
+            }
+            if (op == 0xFD) {
+                if (!same(c, set_image)) {
+                    out.push_back(c);
+                }
+                set_image = c;
+                continue;
+            }
+            if (op == 0xF5) {
+                Command& set = set_tiles[(c.w1 >> 24) & 7];
+                if (!same(c, set)) {
+                    out.push_back(c);
+                }
+                set = c;
+                continue;
+            }
+            if ((next >= strips.size()) || (strips[next].index != i)) {
+                out.push_back(c);
+                continue;
+            }
+            // A strip, a texel short at a join above it and one below. Then its join with the next: the two rows each
+            // side of it loaded into its tile, drawn a texel up and down from it.
+            const Strip& strip = strips[next];
+            int32_t above = (next > 0) ? joins[next - 1] : 0;
+            int32_t below = joins[next];
+            const Command& coords = commands[i + 1];
+            out.push_back({(c.w0 & ~0xFFFu) | (uint32_t)(strip.yh - below), (c.w1 & ~0xFFFu) | (uint32_t)(strip.yl + above)});
+            out.push_back({coords.w0, (coords.w1 & 0xFFFF0000u) | (uint16_t)(strip.t + ((above != 0) ? TEXEL : 0))});
+            out.push_back(commands[i + 2]);
+            if (below != 0) {
+                const Strip& under = strips[next + 1];
+                int32_t row = under.t / TEXEL;
+                out.push_back(with_rows(strip.load, row - 2, row + 1));
+                out.push_back(with_rows(strip.size, row - 2, row + 1));
+                out.push_back({(c.w0 & ~0xFFFu) | (uint32_t)(under.yl + below), (c.w1 & ~0xFFFu) | (uint32_t)(under.yl - below)});
+                out.push_back({coords.w0, (coords.w1 & 0xFFFF0000u) | (uint16_t)(under.t - TEXEL)});
+                out.push_back(commands[i + 2]);
+            }
+            i += 2;
+            next++;
+        }
+        if ((int)out.size() > count) {
+            return;
+        }
+        for (size_t i = 0; i < out.size(); i++) {
+            MEM_W(i * 8, start) = (int32_t)out[i].w0;
+            MEM_W(i * 8 + 4, start) = (int32_t)out[i].w1;
+        }
+        MEM_W(0, gfx) = (int32_t)(start + (gpr)out.size() * 8);
+    }
+}
+
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
+    sprite_start = (int32_t)MEM_W(0, gfx);
     // A picture as wide as the screen: never a panel's, which is a third of it.
     float width = sprite_width;
     sprite_width = 0.0f;
@@ -726,6 +956,8 @@ extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
+    join_strips(rdram, gfx, sprite_start);
+    sprite_start = 0;
     if (sprite_bar) {
         sprite_bar = false;
         GfxCommand commands[6];

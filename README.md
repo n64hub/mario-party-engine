@@ -40,8 +40,13 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   A minigame's corner HUD (each player's name and coins in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) is
   drawn at the window's sides, as far in from its edges as from 4:3's. A bar across the screen (Bobsled Run's progress
   bar between its two views) is stretched over the window, its racers' icons, start and finish going across it with it.
+  A sprite drawn magnified a few rows at a time (the sky behind a minigame's rules) is filtered across each join of its
+  strips, with no hard line along it.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
-  window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. In a 4:3
+  window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. A shape
+  wipe's shape (a star, a circle) is made as many times larger as the picture is wider than 4:3, so it sweeps past the
+  window's corners where the game sized it for 4:3's, and is drawn where the game put it in the frames between the
+  game's, as the colour round it is, where RT64's rect interpolation drew it between two sizes. In a 4:3
   picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there, and a
   fade of the whole screen under a scissor of the whole screen (Mario Party 3's opening draws its flash of white under
   a scissor 8 pixels inside it).
