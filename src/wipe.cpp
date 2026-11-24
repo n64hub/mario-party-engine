@@ -45,7 +45,17 @@
 // across the window, a shape too wide for the colour around it, which mp_wipe_sides drew over the circle at the
 // window's sides: the board cut to 4:3 for the circle's first frame. mp_wipe_square_sides turns the game's texture
 // rectangle into no-ops and draws the whole square instead, aligned to the screen's centre under the wide scissor, its
-// texture where the game's would have it, and the colour only past the square.
+// texture where the game's would have it, and the colour only past the square. A square whose left edge is the screen's
+// (0, the game's square exactly as wide as the screen, halfway through Mario Party 1's star wipe and its Chance Time
+// "!") RT64 stretched the same way, so the shape popped larger for that frame: that one is drawn whole too. What is
+// drawn stops a pixel past the picture's edges, a rectangle's edges being 10 bits of whole pixels.
+//
+// A shape wipe sizes its shape for a 4:3 screen: it closes from a square past the screen's corners and opens to one,
+// and a wider picture's sides were black (or the wipe's colour) while the shape's points were still in 4:3's corners,
+// and snapped off as it opened or on as it closed. mp_wipe_shape_scale, given the shape's size as the wipe module's
+// shape function starts (Mario Party 1's func_8007420C(gfx, size, alpha), the size a float in a general register),
+// makes it as many times larger as the picture is wider than 4:3 (picture_half), so the shape sweeps the whole width.
+// A 4:3 picture's is unchanged.
 //
 // A 4:3 picture's sides are black whatever its scene draws: mp_wipe_picture_sides, where a game ends the last display
 // list of its frame (after its wipe and its text), given the list's next command, fills the window black from past its
