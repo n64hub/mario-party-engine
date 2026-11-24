@@ -95,6 +95,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -741,8 +743,25 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
         return;
     }
 
+    // WIP experiment (to be taken out): MP_HUD_DIAG=1 logs sprites drawn near or past 4:3's edges, and
+    // MP_HUD_ALL_MIDDLE=1 draws every sprite in the 4:3 middle as a message's letter.
+    static const bool diag = std::getenv("MP_HUD_DIAG") != nullptr;
+    static const bool all_middle = std::getenv("MP_HUD_ALL_MIDDLE") != nullptr;
+    bool diag_hand = false;
+    bool middle = (panel_of(rdram, sprite, diag_hand) < 0) && (side_of(rdram, sprite) == 0);
+    if (diag) {
+        int16_t dx = MEM_H(4, sprite);
+        int16_t dy = MEM_H(6, sprite);
+        static uint32_t calls = 0;
+        calls++;
+        if (((dx < 24) || (dx > SCREEN_W - 24)) && ((calls % 7) == 0)) {
+            std::fprintf(stderr, "DIAG sprite %08X x %d y %d middle %d message %d attr %08X\n", (uint32_t)sprite, dx,
+                         dy, middle ? 1 : 0, is_message(rdram, sprite) ? 1 : 0, (uint32_t)MEM_W(0x20, sprite));
+            std::fflush(stderr);
+        }
+    }
     // A message's letter, drawn in the 4:3 middle under a scissor of the whole window.
-    sprite_message = !picture_4x3 && is_message(rdram, sprite);
+    sprite_message = !picture_4x3 && (is_message(rdram, sprite) || (all_middle && middle));
     if (sprite_message) {
         sprite_reach = reach_past_4x3();
         GfxCommand commands[5];
