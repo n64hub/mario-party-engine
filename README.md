@@ -38,8 +38,11 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   in the sprite manager, whose code is the decompilations' asm. The letters of the game's big messages (WINS! after a
   minigame), which come in from five times their size, reach out to the window's edges rather than stop at 4:3's.
   A minigame's corner HUD (each player's name and coins in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) is
-  drawn at the window's sides, as far in from its edges as from 4:3's. A sprite drawn magnified a few rows at a time
-  (the sky behind a minigame's rules) is filtered across each join of its strips, with no hard line along it.
+  drawn at the window's sides, as far in from its edges as from 4:3's. A bar across the screen (Bobsled Run's progress
+  bar between its two views) is stretched over the window from edge to edge, its racers' icons, start and finish going
+  across it with it.
+  A sprite drawn magnified a few rows at a time (the sky behind a minigame's rules) is filtered across each join of its
+  strips, with no hard line along it.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. A shape
   wipe's shape (a star, a circle) is made as many times larger as the picture is wider than 4:3, so it sweeps past the
@@ -120,7 +123,7 @@ Anything else the games share comes here when a change needs it in more than one
 - The game's `patches/syms.ld` has the natives (`docs/processes.md`, and `src/hud.cpp`'s `recomp_hud_widest`), and its
   `patches/survey.c` a `survey_tick`, which the scheduler calls once a frame.
 - The game's `us.toml` hooks the sprite manager (with each sprite's width and place on the screen, from its own layout
-  of a sprite), its board's panels, its message module's letters and a minigame's corner HUD for `src/hud.cpp`, and
+  of a sprite), its board's panels, its message module's letters, a minigame's corner HUD and Bobsled Run's bar for `src/hud.cpp`, and
   the wipe module and the end of a frame's last display list for `src/wipe.cpp` (their headers say which functions),
   and where a walk and the map's view take their pace, for `src/board_options.cpp`, and the model walk, its queue and
   the queue's draw for `src/model_ids.cpp` (its header says where).
