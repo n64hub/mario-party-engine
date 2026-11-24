@@ -38,7 +38,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   in the sprite manager, whose code is the decompilations' asm. The letters of the game's big messages (WINS! after a
   minigame), which come in from five times their size, reach out to the window's edges rather than stop at 4:3's.
   A minigame's corner HUD (each player's name and coins in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) is
-  drawn at the window's sides, as far in from its edges as from 4:3's.
+  drawn at the window's sides, as far in from its edges as from 4:3's. A sprite drawn magnified a few rows at a time
+  (the sky behind a minigame's rules) is filtered across each join of its strips, with no hard line along it.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. A shape
   wipe's shape (a star, a circle) is made as many times larger as the picture is wider than 4:3, so it sweeps past the
