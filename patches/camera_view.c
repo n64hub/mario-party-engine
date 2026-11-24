@@ -33,10 +33,17 @@
 //   and so does every camera while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
-//   at the window's sides. A scene whose 3D in the screen's bottom lines shows what a TV's overscan hid has it cut at
-//   the border's bottom edge (camera_view_border_bottom), whatever its camera's scissor, the picture behind it showing
-//   there: Mario Party's Mini-Game Stadium results, whose camera draws the whole screen and whose coin columns go on
-//   down through the podiums they rise from, past the podiums' feet at that edge, to the screen's last line.
+//   at the window's sides. RT64 fits a pass to 4:3 (each scissor's edges and each 3D view's viewport) only when the
+//   scissors of all it draws in it, together, are as wide for their height as the screen, and some frames it starts a
+//   pass at a half's camera: Desert Dash's right half, in a pass of its own, kept its 3D squeezed to 4:3 but its
+//   scissor the console's, to the window's right edge, and what the game draws past the screen's edge to be cut there
+//   (the ground and a tree beyond the half's right side) showed over the black at the window's right. A half's or a
+//   quarter's camera puts a rectangle under the whole screen's scissor first, below the screen, so the scissor cuts
+//   all of it and it draws nothing, and its pass is the screen's width (split_whole). A scene whose 3D in the screen's
+//   bottom lines shows what a TV's overscan hid has it cut at the border's bottom edge (camera_view_border_bottom),
+//   whatever its camera's scissor, the picture behind it showing there: Mario Party's Mini-Game Stadium results, whose
+//   camera draws the whole screen and whose coin columns go on down through the podiums they rise from, past the
+//   podiums' feet at that edge, to the screen's last line.
 //   A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D ends short of a wide
 //   window's edges) has the scissor that would reach the window's edges stop that far from the screen's middle (an
 //   origin at the window's centre), so its 3D ends there, with black past it. A scissor that closes the border, as a
@@ -207,6 +214,13 @@ static void span_width(Gfx** gfx, u16 left_origin, s32 left_x, u16 right_origin,
     gEXPopScissor((*gfx)++);
 }
 
+// A rectangle under the whole screen's scissor, below the screen, which the scissor cuts all of: it draws nothing, and
+// the pass it is drawn in is the screen's width.
+static void split_whole(Gfx** gfx) {
+    gDPSetScissor((*gfx)++, G_SC_NON_INTERLACE, 0, 0, SCREEN_W, SCREEN_H);
+    gDPFillRectangle((*gfx)++, 0, SCREEN_H, 1, SCREEN_H + 1);
+}
+
 void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     u16 left_origin = G_EX_ORIGIN_LEFT;
     u16 right_origin = G_EX_ORIGIN_RIGHT;
@@ -260,6 +274,10 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
         return;
     }
 
+    // A half or a quarter of a screen split between players: an edge on the screen's middle.
+    if ((left < right) && ((left == SCREEN_W / 2) || (right == SCREEN_W / 2))) {
+        split_whole(gfx);
+    }
     gDPSetScissor((*gfx)++, G_SC_NON_INTERLACE, left, top, right, bottom);
     keep_wipe(left, top, right, bottom, G_EX_ORIGIN_NONE, left, G_EX_ORIGIN_NONE, right, top, bottom);
 }
