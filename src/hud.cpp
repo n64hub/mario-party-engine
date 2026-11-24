@@ -3,7 +3,8 @@
 // console, the way the PC ports of N64 games that widen the picture draw a HUD. A picture at least as wide as the
 // screen (a minigame's sky behind its 3D) is drawn stretched over the whole window wherever the game puts it. So is a
 // minigame's corner HUD (each player's name and coins, in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) at the
-// window's sides. Everything else the sprite manager draws (text windows, menus, a minigame's other sprites, its timer)
+// window's sides. A bar across the screen (Bobsled Run's progress bar between its two views) is stretched over the
+// window with what is on it. Everything else the sprite manager draws (text windows, menus, a minigame's other sprites, its timer)
 // stays in the 4:3 middle, where RT64 draws a rectangle by default. The letters of the game's big messages (a minigame's winner's name and WINS!)
 // stay there too, but reach out to the window's edges: they come in from five times their size, wider than the
 // screen, and their outer letters were cut off at 4:3's edges.
@@ -38,6 +39,14 @@
 //   sprites (the decompilation's esprite, each a group of the sprite manager) and how many: each is drawn from the
 //   window's edge on the side its x is on, as far in from it as it is from 4:3's, as a panel at its corner. The game
 //   puts them at hardcoded 4:3 places, so in a wider window they sat in its middle, the right ones over the scene.
+// - mp_hud_bar where a minigame has made a bar across the screen of basic sprites, with where it keeps the indexes of
+//   one of each of its pieces' pictures and the rows of the screen over it: every sprite drawn from those pictures is
+//   stretched over the window (gEXSetRectAspect G_EX_ASPECT_STRETCH), and every other sprite drawn with its y on those
+//   rows is aligned as far across the window as its x is across the screen, at its own size. The game puts the bar at
+//   4:3's width, so in a wider window it stopped at 4:3's edges between views going on to the window's, its start and
+//   finish with it. A sprite drawn from the bar's pictures under another group is stretched as well. A piece less than
+//   BAR_GAP in from the screen's left edge is drawn from it, wider by as far (Bobsled Run's first tile, 8 in), so the
+//   bar reaches the window's left edge as it reaches its right.
 // - mp_hud_group_killed where the sprite manager kills a group (HuSprGrpKill), and mp_hud_reset where it starts again
 //   with no groups (its init, which forgets them without killing them), so a group the board's panels or hands, a
 //   message or a corner HUD used is forgotten when it is freed, before the memory goes to another group.
@@ -138,6 +147,16 @@ namespace {
     constexpr int BASIC_SIZE = 0x24;
     constexpr int BASIC_GROUP = 0x04;
     constexpr int BASIC_X = 0x0A;
+    // A sprite of Mario Party's sprite manager: its x and y, s16s at 4 and 6, its scale across, a float at 0x14, and its
+    // picture's data (the frames its hook reads its width from), a pointer at 0x4C.
+    constexpr int SPRITE_X = 0x04;
+    constexpr int SPRITE_Y = 0x06;
+    constexpr int SPRITE_SCALE_X = 0x14;
+    constexpr int SPRITE_DATA = 0x4C;
+    // How many of a bar's pieces are kept: Bobsled Run's has two, its tiles and its finish post.
+    constexpr int BAR_PIECES = 4;
+    // How far in from the screen's left edge a piece of the bar may start and still be drawn from it: a tile's width.
+    constexpr int BAR_GAP = 16;
 
     enum class Corner {
         // Its place the next time it is drawn.
@@ -181,6 +200,14 @@ namespace {
     Side sides[SIDES];
     int32_t side_members = 0;
     int sides_next = 0;
+    // A bar across the screen (mp_hud_bar): its pieces' groups, 0 for none, and their pictures' data, and the rows of the
+    // screen over it, from bar_top up to bar_bottom.
+    struct BarPiece {
+        gpr group;
+        gpr data;
+    };
+    BarPiece bar[BAR_PIECES];
+    int32_t bar_top = 0, bar_bottom = 0;
     // The messages' groups, 0 for none, and their members' offset in a group.
     gpr messages[MESSAGES];
     int32_t message_members = 0;
@@ -199,6 +226,12 @@ namespace {
     // as wide as the screen, with an aspect of its own until its end.
     float sprite_width = 0.0f;
     bool sprite_picture = false;
+    // Whether the one being drawn is a piece of the bar, stretched as a picture under a scissor of the whole window.
+    bool sprite_bar = false;
+    // A piece of the bar drawn from the screen's left edge: the sprite, 0 for none, and the x and scale it had.
+    gpr bar_moved = 0;
+    int16_t bar_x = 0;
+    uint32_t bar_scale = 0;
     // Where the next sprite is on the screen, from mp_hud_sprite_at, and whether a game's hook said.
     float sprite_x = 0.0f, sprite_y = 0.0f;
     bool sprite_at = false;
@@ -318,6 +351,30 @@ namespace {
             }
         }
         return 0;
+    }
+
+    // How a sprite is drawn with the bar: as a Piece of it (drawn from one of its pieces' pictures), Over it (drawn with
+    // its y on the bar's rows), or Off it, every sprite while there is no bar.
+    enum class OnBar {
+        Off,
+        Piece,
+        Over,
+    };
+
+    OnBar on_bar(uint8_t* rdram, gpr sprite) {
+        bool any = false;
+        gpr data = (gpr)(int32_t)MEM_W(SPRITE_DATA, sprite);
+        for (const BarPiece& piece : bar) {
+            if (piece.group == 0) {
+                continue;
+            }
+            any = true;
+            if (piece.data == data) {
+                return OnBar::Piece;
+            }
+        }
+        int16_t y = (int16_t)MEM_H(SPRITE_Y, sprite);
+        return (any && (y >= bar_top) && (y < bar_bottom)) ? OnBar::Over : OnBar::Off;
     }
 
     // How far the picture reaches past 4:3 on each side, in the screen's pixels, rounded up: to the window's edges, or
@@ -450,6 +507,37 @@ extern "C" void mp_hud_side_sprites(uint8_t* rdram, gpr ids, int32_t count, gpr 
     }
 }
 
+// mp_hud_bar(ids, count, basic, groups, members, top, bottom): count of the game's basic sprites, their indexes at ids
+// (as mp_hud_side_sprites reads them), are the pieces of a bar across the screen, whose sprites are over it from row top
+// of the screen up to bottom. Every sprite drawn from one of the pieces' pictures (the bar's other tiles, the same
+// picture over and over) is stretched with the screen over the window, as a picture, and every other sprite drawn with
+// its y over the bar where its x falls on the stretched bar, at its own size: a minigame's progress bar between its
+// two views (Mario Party's Bobsled Run), its racers' icons going from its start to its finish. Until the pieces'
+// groups are killed.
+extern "C" void mp_hud_bar(uint8_t* rdram, gpr ids, int32_t count, gpr basic, gpr groups, int32_t members,
+                           int32_t top, int32_t bottom) {
+    std::memset(bar, 0, sizeof(bar));
+    bar_top = top;
+    bar_bottom = bottom;
+    for (int32_t i = 0; (i < count) && (i < BAR_PIECES); i++) {
+        int16_t id = (int16_t)MEM_H(i * 2, ids);
+        if (id < 0) {
+            continue;
+        }
+        int16_t index = (int16_t)MEM_H(BASIC_GROUP, basic + id * BASIC_SIZE);
+        if (index < 0) {
+            continue;
+        }
+        gpr group = (gpr)(int32_t)MEM_W(index * 4, groups);
+        if ((group == 0) || (MEM_HU(GROUP_COUNT, group) == 0)) {
+            continue;
+        }
+        gpr sprite = (gpr)(int32_t)MEM_W(members, group);
+        bar[i].group = group;
+        bar[i].data = (gpr)(int32_t)MEM_W(SPRITE_DATA, sprite);
+    }
+}
+
 extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
     for (gpr& known : messages) {
         if (known == group) {
@@ -459,6 +547,11 @@ extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
     for (Side& known : sides) {
         if (known.group == group) {
             known.group = 0;
+        }
+    }
+    for (BarPiece& piece : bar) {
+        if (piece.group == group) {
+            piece.group = 0;
         }
     }
     for (Panel& panel : panels) {
@@ -475,6 +568,7 @@ extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
 extern "C" void mp_hud_reset(uint8_t* rdram) {
     std::memset(messages, 0, sizeof(messages));
     std::memset(sides, 0, sizeof(sides));
+    std::memset(bar, 0, sizeof(bar));
     for (Panel& panel : panels) {
         panel.group = 0;
         panel.hand = 0;
@@ -772,6 +866,35 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
         return;
     }
 
+    // A piece of the bar, stretched over the window as a picture, under a scissor of the whole window. In a picture that
+    // stops short of the window's edges the bar stays 4:3, with what is over it.
+    OnBar with_bar = (picture_4x3 || (picture_short_half() > 0.0f)) ? OnBar::Off : on_bar(rdram, sprite);
+    if (with_bar == OnBar::Piece) {
+        sprite_bar = true;
+        // A piece starting near the screen's left edge: from it, as much wider as it was in from it.
+        int16_t x = (int16_t)MEM_H(SPRITE_X, sprite);
+        if ((x > 0) && (x < BAR_GAP) && (width > 0.0f)) {
+            bar_moved = sprite;
+            bar_x = x;
+            bar_scale = MEM_W(SPRITE_SCALE_X, sprite);
+            union {
+                uint32_t u;
+                float f;
+            } scale;
+            scale.u = bar_scale;
+            scale.f *= (x + width) / width;
+            MEM_H(SPRITE_X, sprite) = 0;
+            MEM_W(SPRITE_SCALE_X, sprite) = scale.u;
+        }
+        GfxCommand commands[6];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_STRETCH);
+        scissor_to_window(&commands[2]);
+        whole_screen(&commands[5]);
+        emit(rdram, gfx, commands, 6);
+        return;
+    }
+
     // A panel's sprite follows its corner even while the picture is 4:3, and is aligned only when it isn't. Its item,
     // and the hand that carries it, are as far in as the panel or as far as the item is carried, whichever is further:
     // or where a game's hook says it is, an item the board has moved as item_fraction says, and the hand as its item.
@@ -803,8 +926,14 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     if (side != 0) {
         fraction = (side < 0) ? 0.0f : 1.0f;
     }
-    sprite_aligned = !picture_4x3 &&
-                     ((side != 0) || ((panel >= 0) && ((panels[panel].side != 0) || (fraction != 0.5f))));
+    // A sprite over the bar: the alignment as far across the window as its x is across the screen, where that x is on
+    // the stretched bar.
+    bool over_bar = (panel < 0) && (side == 0) && (with_bar == OnBar::Over);
+    if (over_bar) {
+        fraction = std::clamp((int16_t)MEM_H(SPRITE_X, sprite) / (float)SCREEN_W, 0.0f, 1.0f);
+    }
+    sprite_aligned = !picture_4x3 && (over_bar || (side != 0) ||
+                                      ((panel >= 0) && ((panels[panel].side != 0) || (fraction != 0.5f))));
     if (!sprite_aligned) {
         return;
     }
@@ -872,6 +1001,21 @@ extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     join_strips(rdram, gfx, sprite_start);
     sprite_start = 0;
+    if (sprite_bar) {
+        sprite_bar = false;
+        if (bar_moved != 0) {
+            MEM_H(SPRITE_X, bar_moved) = bar_x;
+            MEM_W(SPRITE_SCALE_X, bar_moved) = bar_scale;
+            bar_moved = 0;
+        }
+        GfxCommand commands[6];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);
+        scissor_own(&commands[2]);
+        whole_screen(&commands[5]);
+        emit(rdram, gfx, commands, 6);
+        return;
+    }
     if (sprite_picture) {
         sprite_picture = false;
         GfxCommand commands[2];

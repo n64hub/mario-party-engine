@@ -57,6 +57,17 @@
 // makes it as many times larger as the picture is wider than 4:3 (picture_half), so the shape sweeps the whole width.
 // A 4:3 picture's is unchanged.
 //
+// A shape wipe's square changes size every game frame, and the runtime's RT64 pairs a texture rectangle with the one
+// of the frame before that drew the same texture at another scale with the same texels at its corners (its
+// RT64_INTERPOLATE_RECT_SCROLLS, for a sprite the game grows or shrinks as it moves) and draws it between the two sizes
+// in the frames between the game's. The colour's rectangles around the square, which have no texels to say they are
+// the same thing cut, it draws where the game put them. So at a frame rate above the game's the shape was drawn between
+// its last size and its new one while the colour stopped at the new square's edges: Mario Party 1's Chance Time "!"
+// showed a ring of the scene round its square as it opened, and its "!" larger than the game drew it for a frame.
+// mp_wipe_square_sides, which runs after every square the shape wipe draws, gives the shape's tile (tile 0, set before
+// the square) palette 0 and 1 in turn, which a texture of intensities doesn't read: no two game frames running draw the
+// same tile, and RT64 draws the shape where the game put it, as it does the colour.
+//
 // A 4:3 picture's sides are black whatever its scene draws: mp_wipe_picture_sides, where a game ends the last display
 // list of its frame (after its wipe and its text), given the list's next command, fills the window black from past its
 // left edge to 4:3's and from 4:3's right edge to past its right edge, two fill rectangles of the window's sides alone
@@ -126,7 +137,32 @@ namespace {
     constexpr uint32_t G_RDPHALF_1 = 0xE1;
     constexpr uint32_t G_RDPHALF_2 = 0xF1;
     constexpr uint32_t G_SETCOMBINE = 0xFC;
+    constexpr uint32_t G_SETTILE = 0xF5;
+    // gbi.h's G_IM_FMT_CI, the one format whose tile's palette is read.
+    constexpr uint32_t FMT_CI = 2;
     constexpr int LOOK_BACK = 32;
+
+    // The palette the shape's tile takes next (unpair_shape).
+    uint32_t shape_palette = 0;
+
+    // The shape's tile (tile 0), found back from *gfx before its square, given palette 0 or 1, the other of the last
+    // square's, unless its texture is of colour indices.
+    void unpair_shape(uint8_t* rdram, gpr gfx) {
+        gpr at = (int32_t)MEM_W(0, gfx);
+        for (int i = 1; i <= LOOK_BACK; i++) {
+            gpr command = at - 8 * i;
+            uint32_t word0 = (uint32_t)MEM_W(0, command);
+            uint32_t word1 = (uint32_t)MEM_W(4, command);
+            if (((word0 >> 24) != G_SETTILE) || (((word1 >> 24) & 7) != 0)) {
+                continue;
+            }
+            if (((word0 >> 21) & 7) != FMT_CI) {
+                MEM_W(4, command) = (int32_t)((word1 & ~(0xFu << 20)) | (shape_palette << 20));
+                shape_palette ^= 1;
+            }
+            return;
+        }
+    }
 
     // How far the frame's picture reaches each side of the screen's middle, in the screen's pixels.
     float picture_half() {
@@ -298,6 +334,7 @@ extern "C" void mp_wipe_sides(uint8_t* rdram, gpr gfx) {
 }
 
 extern "C" void mp_wipe_square_sides(uint8_t* rdram, gpr gfx, gpr left, gpr right) {
+    unpair_shape(rdram, gfx);
     sides(rdram, gfx, (int16_t)left, (int16_t)right);
 }
 
