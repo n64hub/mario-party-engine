@@ -44,7 +44,9 @@
 //   stretched over the window (gEXSetRectAspect G_EX_ASPECT_STRETCH), and every other sprite drawn with its y on those
 //   rows is aligned as far across the window as its x is across the screen, at its own size. The game puts the bar at
 //   4:3's width, so in a wider window it stopped at 4:3's edges between views going on to the window's, its start and
-//   finish with it. A sprite drawn from the bar's pictures under another group is stretched as well.
+//   finish with it. A sprite drawn from the bar's pictures under another group is stretched as well. A piece less than
+//   BAR_GAP in from the screen's left edge is drawn from it (Bobsled Run's first tile, 8 in), so the bar reaches the
+//   window's left edge as it reaches its right.
 // - mp_hud_group_killed where the sprite manager kills a group (HuSprGrpKill), and mp_hud_reset where it starts again
 //   with no groups (its init, which forgets them without killing them), so a group the board's panels or hands, a
 //   message or a corner HUD used is forgotten when it is freed, before the memory goes to another group.
@@ -150,6 +152,8 @@ namespace {
     constexpr int SPRITE_DATA = 0x4C;
     // How many of a bar's pieces are kept: Bobsled Run's has two, its tiles and its finish post.
     constexpr int BAR_PIECES = 4;
+    // How far in from the screen's left edge a piece of the bar may start and still be drawn from it: a tile's width.
+    constexpr int BAR_GAP = 16;
 
     enum class Corner {
         // Its place the next time it is drawn.
@@ -221,6 +225,9 @@ namespace {
     bool sprite_picture = false;
     // Whether the one being drawn is a piece of the bar, stretched as a picture under a scissor of the whole window.
     bool sprite_bar = false;
+    // A piece of the bar moved to the screen's left edge: its x's address, 0 for none, and the x it had.
+    gpr bar_moved = 0;
+    int16_t bar_x = 0;
     // Where the next sprite is on the screen, from mp_hud_sprite_at, and whether a game's hook said.
     float sprite_x = 0.0f, sprite_y = 0.0f;
     bool sprite_at = false;
@@ -843,6 +850,12 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     OnBar with_bar = (picture_4x3 || (picture_short_half() > 0.0f)) ? OnBar::Off : on_bar(rdram, sprite);
     if (with_bar == OnBar::Piece) {
         sprite_bar = true;
+        int16_t x = (int16_t)MEM_H(SPRITE_X, sprite);
+        if ((x > 0) && (x < BAR_GAP)) {
+            bar_moved = sprite + SPRITE_X;
+            bar_x = x;
+            MEM_H(SPRITE_X, sprite) = 0;
+        }
         GfxCommand commands[6];
         gEXEnable(&commands[0]);
         gEXSetRectAspect(&commands[1], G_EX_ASPECT_STRETCH);
@@ -960,6 +973,10 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     sprite_start = 0;
     if (sprite_bar) {
         sprite_bar = false;
+        if (bar_moved != 0) {
+            MEM_H(0, bar_moved) = bar_x;
+            bar_moved = 0;
+        }
         GfxCommand commands[6];
         gEXEnable(&commands[0]);
         gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);

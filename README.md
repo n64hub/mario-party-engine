@@ -39,7 +39,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   minigame), which come in from five times their size, reach out to the window's edges rather than stop at 4:3's.
   A minigame's corner HUD (each player's name and coins in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) is
   drawn at the window's sides, as far in from its edges as from 4:3's. A bar across the screen (Bobsled Run's progress
-  bar between its two views) is stretched over the window, its racers' icons, start and finish going across it with it.
+  bar between its two views) is stretched over the window from edge to edge, its racers' icons, start and finish going
+  across it with it.
   A sprite drawn magnified a few rows at a time (the sky behind a minigame's rules) is filtered across each join of its
   strips, with no hard line along it.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
