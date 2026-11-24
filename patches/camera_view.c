@@ -39,13 +39,12 @@
 //   scissor the console's, to the window's right edge, and what the game draws past the screen's edge to be cut there
 //   (the ground and a tree beyond the half's right side) showed over the black at the window's right. A half's or a
 //   quarter's camera draws a triangle of no area under the whole screen's scissor first, so its pass is the screen's
-//   width (split_whole), under a projection of its own, so the half's own projection isn't widened for it. A
-//   rectangle there instead, cut by the scissor, had RT64 texture the half's 3D with what was drawn before it. A
-//   scene whose 3D in the screen's
-//   bottom lines shows what a TV's overscan hid has it cut at the border's bottom edge (camera_view_border_bottom),
-//   whatever its camera's scissor, the picture behind it showing there: Mario Party's Mini-Game Stadium results, whose
-//   camera draws the whole screen and whose coin columns go on down through the podiums they rise from, past the
-//   podiums' feet at that edge, to the screen's last line.
+//   width (split_whole), under a projection of its own, so the half's own projection isn't widened for it. A rectangle
+//   there instead, cut by the scissor, had RT64 texture the half's 3D with what was drawn before it. A scene whose 3D
+//   in the screen's bottom lines shows what a TV's overscan hid has it cut at the border's bottom edge
+//   (camera_view_border_bottom), whatever its camera's scissor, the picture behind it showing there: Mario Party's
+//   Mini-Game Stadium results, whose camera draws the whole screen and whose coin columns go on down through the
+//   podiums they rise from, past the podiums' feet at that edge, to the screen's last line.
 //   A scene drawn no wider than an aspect past 4:3 (board_back_scene_widest: a stage whose 3D ends short of a wide
 //   window's edges) has the scissor that would reach the window's edges stop that far from the screen's middle (an
 //   origin at the window's centre), so its 3D ends there, with black past it. A scissor that closes the border, as a
