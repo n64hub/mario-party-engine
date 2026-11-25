@@ -766,7 +766,7 @@ namespace {
             const Strip& f = strips[0];
             uint64_t key = ((uint64_t)strips.size() << 48) ^ ((uint64_t)(uint32_t)f.dtdy << 32) ^
                            ((uint64_t)(uint32_t)f.dsdx << 16) ^ (uint64_t)(f.xh - f.xl) ^ ((uint64_t)f.image.w1 << 20);
-            if ((lines < 400) && seen.insert(key).second) {
+            if ((lines < 400) && ((f.dtdy < 1024) || (f.dsdx < 1024)) && seen.insert(key).second) {
                 for (size_t k = 0; (k < strips.size()) && (lines < 400); k++, lines++) {
                     const Strip& a = strips[k];
                     printf("DIAGSTRIP n=%d k=%d tile=%d rect=%d,%d-%d,%d st=%d,%d d=%d,%d img=%08x,%08x load=%08x,%08x "
