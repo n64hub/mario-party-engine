@@ -27,7 +27,7 @@
 //   recomp_prc_exit()                    from a process: it has ended; never returns
 //   recomp_prc_reset()                   ends every process's thread (the scheduler's init)
 //
-// And for the game's own code, mp_prc_started(): the keys of the processes that have started, which hold state on a
+// And for the game's own code, mp_prc_started() (process_threads.h): the keys, lowest first, of the processes that have started, which hold state on a
 // native stack, so that a game knows when a snapshot of RDRAM holds all of its state.
 //
 // Built with MP_PROCESS_STATS (CMake option of that name), it prints every 5 seconds how many processes are alive, how
@@ -47,6 +47,7 @@
 #include "librecomp/overlays.hpp"
 #include "ultramodern/ultramodern.hpp"
 #include "lightweightsemaphore.h"
+#include "process_threads.h"
 
 // ultramodern's (threads.cpp): which game thread this native thread is.
 extern thread_local PTR(OSThread) thread_self;
@@ -240,14 +241,17 @@ namespace {
     }
 }
 
-// The keys of the processes that have started (have a thread), for a snapshot of the game to know which processes'
-// state is all in RDRAM: one that hasn't started is only its jmp_buf and stack there.
+// process_threads.h says what it is for. Sorted, as the map's order is the standard library's and two machines in a
+// netplay session may not share one.
 std::vector<uint32_t> mp_prc_started() {
-    std::lock_guard lock{ workers_mutex };
     std::vector<uint32_t> keys;
-    for (const auto& [key, worker] : running) {
-        keys.push_back(key);
+    {
+        std::lock_guard lock{ workers_mutex };
+        for (const auto& [key, worker] : running) {
+            keys.push_back(key);
+        }
     }
+    std::sort(keys.begin(), keys.end());
     return keys;
 }
 
