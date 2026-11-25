@@ -10,10 +10,22 @@
 // The menu's text (the title, the options, the version) is outlined in black, so it reads on a picture where it was
 // made for the dark colour: a font effect, which RmlUi's text inherits, set on the launcher once. RecompFrontend's
 // Style has no setter for font effects, so a Style of this file's own sets the property, and the launcher enables it.
+//
+// The picture is decoded here, to RGBA, and queued as that: RecompFrontend hands a queued file to RT64, which reads only
+// a PNG or a DDS, where a JPEG keeps a painting's picture a tenth of the size. stb_image does it, the copy RT64 carries
+// (its src/contrib is on every game's include path), built here with static linkage so it can't clash with RT64's own.
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#include "stb/stb_image.h"
 
 #include "RmlUi/Core/StyleSheetSpecification.h"
 #include "recompui/recompui.h"
@@ -37,11 +49,20 @@ namespace {
     };
 }
 
-void mp_launcher_background::set(recompui::LauncherMenu* menu, std::span<const char> png) {
+void mp_launcher_background::set(recompui::LauncherMenu* menu, std::span<const char> picture) {
     using namespace recompui;
     static TextOutline outline;
 
-    queue_image_from_bytes_file(texture_name, std::vector<char>(png.begin(), png.end()));
+    int width = 0, height = 0;
+    stbi_uc* rgba = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(picture.data()), int(picture.size()), &width, &height,
+        nullptr, 4);
+    if (rgba == nullptr) {
+        return; // Not a picture stb_image reads: the launcher stays as RecompFrontend draws it.
+    }
+    const char* bytes = reinterpret_cast<const char*>(rgba);
+    queue_image_from_bytes_rgba32(texture_name, std::vector<char>(bytes, bytes + size_t(width) * size_t(height) * 4),
+        uint32_t(width), uint32_t(height));
+    stbi_image_free(rgba);
 
     ContextId context = get_current_context();
     Element* container = menu->get_background_wrapper();
