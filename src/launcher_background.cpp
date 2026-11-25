@@ -21,7 +21,9 @@
 #include "launcher_background.h"
 
 namespace {
-    const std::string texture_name = "mp_launcher_background";
+    // A name starting with '?' reaches RecompFrontend's queued images as it is (RmlUi's RenderManager::LoadTexture);
+    // any other is first joined to the document's path, found in no queue, and drawn as a transparent pixel.
+    const std::string texture_name = "?/mp/launcher_background";
     constexpr std::string_view outline_style_name = "mp_launcher_text_outline";
 
     struct TextOutline : recompui::Style {
