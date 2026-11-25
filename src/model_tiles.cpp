@@ -126,6 +126,24 @@ extern "C" void mp_model_batch_end(uint8_t* rdram, gpr dl_head, gpr vertices_at,
     if (last_s != tile.last_s || last_t != tile.last_t) {
         static std::set<uint64_t> seen;
         uint64_t key = ((uint64_t)(uint32_t)tile.texture << 32) | ((uint64_t)(last_s & 0xFFF) << 12) | (uint64_t)(last_t & 0xFFF);
+        // DIAG: a table at 0x80F00000 ('MPTT', count, then {command, the game's w1, the clamped w1}) a page's script
+        // swaps to see a scene with the clamps and without.
+        const gpr table = (gpr)(int32_t)0x80F00000;
+        if ((uint32_t)MEM_W(0, table) != 0x4D505454) {
+            MEM_W(0, table) = 0x4D505454;
+            MEM_W(4, table) = 0;
+        }
+        uint32_t count = (uint32_t)MEM_W(4, table);
+        uint32_t own = (w1 & 0xFF000000) | ((uint32_t)(tile.last_s << 2) << 12) | (uint32_t)(tile.last_t << 2);
+        uint32_t clamped = (w1 & 0xFF000000) | ((uint32_t)(last_s << 2) << 12) | (uint32_t)(last_t << 2);
+        if (count > 0 && (gpr)(int32_t)MEM_W(8 + (count - 1) * 12, table) == tile.size) {
+            MEM_W(8 + (count - 1) * 12 + 8, table) = (int32_t)clamped;
+        } else if (count < 80000) {
+            MEM_W(8 + count * 12, table) = (int32_t)tile.size;
+            MEM_W(8 + count * 12 + 4, table) = (int32_t)own;
+            MEM_W(8 + count * 12 + 8, table) = (int32_t)clamped;
+            MEM_W(4, table) = (int32_t)(count + 1);
+        }
         if (seen.insert(key).second) {
             fprintf(stderr, "MPCLAMP tex=%08X tile=%d,%d to %d,%d reach=%d,%d\n", (unsigned)(uint32_t)tile.texture,
                     (int)tile.last_s, (int)tile.last_t, (int)last_s, (int)last_t, (int)tile.reach_s, (int)tile.reach_t);
