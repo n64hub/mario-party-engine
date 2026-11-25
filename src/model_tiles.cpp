@@ -26,6 +26,7 @@
 #include "librecomp/helpers.hpp"
 #include <cstdio>
 #include <set>
+#include <cstdlib>
 
 namespace {
     constexpr uint32_t G_SETTILE = 0xF5;
@@ -39,6 +40,57 @@ namespace {
     constexpr int32_t PAST_EDGE = 2;
 
     gpr batch_start = 0;        // the DL head when the batch started
+
+    // DIAG: the tile's texels, to measure what its clamped edges keep out.
+    struct DiagTex { uint32_t img = 0, pal = 0; int fmt = 0, siz = 0, line = 0; } diag_tex;
+    uint32_t diag_addr(uint32_t a) {
+        if (a >= 0x80000000u && a < 0x80800000u) return a;
+        if (a < 0x00800000u && a != 0) return a | 0x80000000u;
+        return 0;
+    }
+    void diag_rgba16(uint8_t* rdram, uint32_t at, int* c) {
+        uint32_t v = (uint16_t)MEM_HU(0, (gpr)(int32_t)at);
+        c[0] = ((v >> 11) & 31) * 255 / 31; c[1] = ((v >> 6) & 31) * 255 / 31; c[2] = ((v >> 1) & 31) * 255 / 31;
+        c[3] = (v & 1) * 255;
+    }
+    void diag_texel(uint8_t* rdram, int x, int y, int* c) {
+        const DiagTex& t = diag_tex;
+        uint32_t row = t.img + (uint32_t)y * (uint32_t)t.line * (t.siz == 3 ? 16 : 8);
+        if (row + 64 >= 0x80800000u) { c[0] = c[1] = c[2] = c[3] = 0; return; }
+        if (t.siz == 0 || t.siz == 1) {
+            uint32_t v;
+            if (t.siz == 0) { uint32_t b = MEM_BU(0, (gpr)(int32_t)(row + x / 2)); v = (x & 1) ? (b & 15) : (b >> 4); }
+            else { v = MEM_BU(0, (gpr)(int32_t)(row + x)); }
+            if (t.fmt == 2 && t.pal != 0) { diag_rgba16(rdram, t.pal + v * 2, c); return; }
+            if (t.fmt == 3) {   // IA
+                int i, a;
+                if (t.siz == 0) { i = ((v >> 1) & 7) * 255 / 7; a = (v & 1) * 255; } else { i = (v >> 4) * 17; a = (v & 15) * 17; }
+                c[0] = c[1] = c[2] = i; c[3] = a; return;
+            }
+            int i = t.siz == 0 ? v * 17 : v;    // I (or CI without a palette: its index)
+            c[0] = c[1] = c[2] = c[3] = i; return;
+        }
+        if (t.siz == 2) {
+            if (t.fmt == 3) {
+                uint32_t v = (uint16_t)MEM_HU(0, (gpr)(int32_t)(row + x * 2));
+                c[0] = c[1] = c[2] = v >> 8; c[3] = v & 255; return;
+            }
+            diag_rgba16(rdram, row + x * 2, c); return;
+        }
+        uint32_t v = (uint32_t)MEM_W(0, (gpr)(int32_t)(row + x * 4));
+        c[0] = v >> 24; c[1] = (v >> 16) & 255; c[2] = (v >> 8) & 255; c[3] = v & 255;
+    }
+    int texel_diff(uint8_t* rdram, int x0, int y0, int x1, int y1) {
+        int a[4], b[4];
+        diag_texel(rdram, x0, y0, a);
+        diag_texel(rdram, x1, y1, b);
+        int d = abs(a[3] - b[3]);
+        for (int k = 0; k < 3; k++) {
+            int e = abs(a[k] * a[3] / 255 - b[k] * b[3] / 255);
+            if (e > d) d = e;
+        }
+        return d;
+    }
 
     // The tile the part's stream draws with now: its SetTileSize command, 0 if none to clamp.
     struct Tile {
@@ -77,8 +129,16 @@ extern "C" void mp_model_batch_end(uint8_t* rdram, gpr dl_head, gpr vertices_at,
                                    gpr texture) {
     gpr end = (gpr)(int32_t)MEM_W(0, dl_head);
     gpr settile = 0, settilesize = 0;
+    uint32_t image = 0, img = 0, pal = 0;
     for (gpr cmd = batch_start; cmd < end; cmd += 8) {
         uint32_t w0 = (uint32_t)MEM_W(0, cmd), w1 = (uint32_t)MEM_W(4, cmd);
+        if ((w0 >> 24) == 0xFD) {
+            image = w1;
+        } else if ((w0 >> 24) == 0xF0) {
+            pal = image;
+        } else if ((w0 >> 24) == 0xF3 || (w0 >> 24) == 0xF4) {
+            img = image;
+        }
         if ((w0 >> 24) == G_SETTILE && ((w1 >> 24) & 7) == G_TX_RENDERTILE) {
             settile = cmd;
         } else if ((w0 >> 24) == G_SETTILESIZE && ((w1 >> 24) & 7) == G_TX_RENDERTILE) {
@@ -98,6 +158,12 @@ extern "C" void mp_model_batch_end(uint8_t* rdram, gpr dl_head, gpr vertices_at,
             // cms, shifts and cmt, shiftt: a shift scales the coordinates, which then aren't the texture's texels.
             tile.clamp_s = (((t1 >> 8) & 3) & G_TX_CLAMP) && (t1 & 0xF) == 0;
             tile.clamp_t = (((t1 >> 18) & 3) & G_TX_CLAMP) && ((t1 >> 10) & 0xF) == 0;
+            uint32_t t0 = (uint32_t)MEM_W(0, settile);
+            diag_tex.img = diag_addr(img);
+            diag_tex.pal = diag_addr(pal);
+            diag_tex.fmt = (t0 >> 21) & 7;
+            diag_tex.siz = (t0 >> 19) & 3;
+            diag_tex.line = (t0 >> 9) & 0x1FF;
         }
     }
     if (tile.size == 0) {
@@ -145,9 +211,34 @@ extern "C" void mp_model_batch_end(uint8_t* rdram, gpr dl_head, gpr vertices_at,
             MEM_W(4, table) = (int32_t)(count + 1);
         }
         if (seen.insert(key).second) {
-            fprintf(stderr, "MPCLAMP tex=%08X tile=%d,%d to %d,%d reach=%d,%d\n", (unsigned)(uint32_t)tile.texture,
-                    (int)tile.last_s, (int)tile.last_t, (int)last_s, (int)last_t, (int)tile.reach_s, (int)tile.reach_t);
+            // DIAG: how different the texels past each clamped edge are from the last ones drawn: the line the
+            // filter would show. max/mean of the larger of the premultiplied color's and alpha's differences.
+            int maxd_t = -1, sum_t = 0, n_t = 0, maxd_s = -1, sum_s = 0, n_s = 0;
+            if (diag_tex.img != 0) {
+                if (last_t != tile.last_t) {
+                    for (int x = 0; x <= last_s; x++) {
+                        int d = texel_diff(rdram, x, last_t, x, last_t + 1);
+                        if (d > maxd_t) maxd_t = d;
+                        sum_t += d; n_t++;
+                    }
+                }
+                if (last_s != tile.last_s) {
+                    for (int y = 0; y <= last_t; y++) {
+                        int d = texel_diff(rdram, last_s, y, last_s + 1, y);
+                        if (d > maxd_s) maxd_s = d;
+                        sum_s += d; n_s++;
+                    }
+                }
+            }
+            fprintf(stderr, "MPCLAMP tex=%08X tile=%d,%d to %d,%d reach=%d,%d img=%08X pal=%08X fmt=%d siz=%d line=%d "
+                    "edge_t max=%d mean=%d edge_s max=%d mean=%d\n", (unsigned)(uint32_t)tile.texture,
+                    (int)tile.last_s, (int)tile.last_t, (int)last_s, (int)last_t, (int)tile.reach_s, (int)tile.reach_t,
+                    diag_tex.img, diag_tex.pal, diag_tex.fmt, diag_tex.siz, diag_tex.line,
+                    maxd_t, n_t ? sum_t / n_t : -1, maxd_s, n_s ? sum_s / n_s : -1);
         }
+    }
+    if ((uint32_t)MEM_W(0, (gpr)(int32_t)0x80EFFFF0) == 0x4F464621) {   // DIAG: 'OFF!', the fix off
+        return;
     }
     MEM_W(4, tile.size) = (int32_t)((w1 & 0xFF000000) | ((uint32_t)(last_s << 2) << 12) | (uint32_t)(last_t << 2));
 }
