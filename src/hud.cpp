@@ -93,6 +93,9 @@
 //   drawn where it was, and cut off at the window's edge, not 4:3's. mp_hud_sprite_left and mp_hud_sprite_right,
 //   from a game's hook where the sprite manager drops a sprite wholly off the screen (its left past 320, its right
 //   before 0), say where the window's edges are in the sprite's x, moved or not, so one in the window's sides is drawn.
+//   Every other sprite in the 4:3 middle (none of a panel's, a side's or the bar's) is drawn the same way, where the
+//   game puts it and cut off at the window's edges: Shell Game's coins, poured from past the screen's top-left corner
+//   into the player, were cut off at 4:3's left edge, and those wholly past it not drawn.
 // - recomp_hud_widest, from the engine's patches/board_back.c, the widest the picture is drawn. In a 4:3 picture (a
 //   board's opening scene's map is no wider than 4:3, with black at the window's sides) the panels stay where the game
 //   puts them, inside 4:3 with the scene, rather than out over the black. In a picture drawn no wider than an aspect
@@ -104,8 +107,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -212,9 +213,10 @@ namespace {
     gpr messages[MESSAGES];
     int32_t message_members = 0;
     int messages_next = 0;
-    // Whether the sprite being drawn is a message's, in a picture wider than 4:3, how far the window reaches past 4:3
-    // on each side, in the screen's pixels, and where its x is if mp_hud_sprite_reach moved it that far (0 for not).
-    bool sprite_message = false;
+    // Whether the sprite being drawn reaches past 4:3 (a message's, or one in the 4:3 middle), in a picture wider than
+    // 4:3, how far the window reaches past 4:3 on each side, in the screen's pixels, and where its x is if
+    // mp_hud_sprite_reach moved it that far (0 for not).
+    bool sprite_reaching = false;
     int32_t sprite_reach = 0;
     gpr sprite_moved = 0;
     // The player whose hand the game read last, until it sets the hand's group's picture: -1 for none.
@@ -821,6 +823,18 @@ namespace {
     }
 }
 
+// A sprite drawn where it is, under a scissor of the whole window, mp_hud_sprite_reach moving its x as far as the window
+// reaches past 4:3, so the game's own code doesn't cut it off at 4:3's edges.
+static void reach_start(uint8_t* rdram, gpr gfx) {
+    sprite_reaching = true;
+    sprite_reach = reach_past_4x3();
+    GfxCommand commands[5];
+    gEXEnable(&commands[0]);
+    scissor_to_window(&commands[1]);
+    whole_screen(&commands[4]);
+    emit(rdram, gfx, commands, 5);
+}
+
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     sprite_start = (int32_t)MEM_W(0, gfx);
     // A picture as wide as the screen: never a panel's, which is a third of it.
@@ -837,32 +851,9 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
         return;
     }
 
-    // WIP experiment (to be taken out): MP_HUD_DIAG=1 logs sprites drawn near or past 4:3's edges, and
-    // MP_HUD_ALL_MIDDLE=1 draws every sprite in the 4:3 middle as a message's letter.
-    static const bool diag = std::getenv("MP_HUD_DIAG") != nullptr;
-    static const bool all_middle = std::getenv("MP_HUD_ALL_MIDDLE") != nullptr;
-    bool diag_hand = false;
-    bool middle = (panel_of(rdram, sprite, diag_hand) < 0) && (side_of(rdram, sprite) == 0);
-    if (diag) {
-        int16_t dx = MEM_H(4, sprite);
-        int16_t dy = MEM_H(6, sprite);
-        static uint32_t calls = 0;
-        calls++;
-        if (((dx < 24) || (dx > SCREEN_W - 24)) && ((calls % 7) == 0)) {
-            std::fprintf(stderr, "DIAG sprite %08X x %d y %d middle %d message %d attr %08X\n", (uint32_t)sprite, dx,
-                         dy, middle ? 1 : 0, is_message(rdram, sprite) ? 1 : 0, (uint32_t)MEM_W(0x20, sprite));
-            std::fflush(stderr);
-        }
-    }
     // A message's letter, drawn in the 4:3 middle under a scissor of the whole window.
-    sprite_message = !picture_4x3 && (is_message(rdram, sprite) || (all_middle && middle));
-    if (sprite_message) {
-        sprite_reach = reach_past_4x3();
-        GfxCommand commands[5];
-        gEXEnable(&commands[0]);
-        scissor_to_window(&commands[1]);
-        whole_screen(&commands[4]);
-        emit(rdram, gfx, commands, 5);
+    if (!picture_4x3 && is_message(rdram, sprite)) {
+        reach_start(rdram, gfx);
         return;
     }
 
@@ -935,6 +926,12 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     sprite_aligned = !picture_4x3 && (over_bar || (side != 0) ||
                                       ((panel >= 0) && ((panels[panel].side != 0) || (fraction != 0.5f))));
     if (!sprite_aligned) {
+        // Any other sprite in the 4:3 middle (none of a panel's, a side's or the bar's) is drawn where it is, as a
+        // message's letter is, and cut off at the window's edges rather than 4:3's: the coins Shell Game's start pours
+        // in from the screen's top-left corner, past its left edge, into the player.
+        if (!picture_4x3 && (panel < 0) && (with_bar == OnBar::Off)) {
+            reach_start(rdram, gfx);
+        }
         return;
     }
 
@@ -969,7 +966,7 @@ extern "C" float mp_hud_sprite_shift(uint8_t* rdram) {
 // mp_hud_sprite_reach(gfx, x, rects): the sprite mp_hud_sprite_start began has its x, an s16, at x, and is drawn as
 // texture rectangles (rects, not 0) or not.
 extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rects) {
-    if (!sprite_message || (sprite_reach == 0) || (rects == 0)) {
+    if (!sprite_reaching || (sprite_reach == 0) || (rects == 0)) {
         return;
     }
     MEM_H(0, x) = (int16_t)(MEM_H(0, x) + sprite_reach);
@@ -983,16 +980,16 @@ extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rect
     emit(rdram, gfx, commands, 3);
 }
 
-// Where the window's left and right edges are in the x of the sprite being drawn: 0 and 320 but for a message's.
+// Where the window's left and right edges are in the x of the sprite being drawn: 0 and 320 but for one reaching past 4:3.
 extern "C" float mp_hud_sprite_left(uint8_t* rdram) {
-    if (!sprite_message) {
+    if (!sprite_reaching) {
         return 0.0f;
     }
     return (sprite_moved != 0) ? 0.0f : (float)-sprite_reach;
 }
 
 extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
-    if (!sprite_message) {
+    if (!sprite_reaching) {
         return (float)SCREEN_W;
     }
     return (float)(SCREEN_W + sprite_reach * ((sprite_moved != 0) ? 2 : 1));
@@ -1024,8 +1021,8 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
         emit(rdram, gfx, commands, 2);
         return;
     }
-    if (sprite_message) {
-        sprite_message = false;
+    if (sprite_reaching) {
+        sprite_reaching = false;
         GfxCommand commands[7];
         int count = 0;
         gEXEnable(&commands[count++]);
