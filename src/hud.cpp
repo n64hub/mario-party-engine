@@ -106,6 +106,8 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <cstdio>
+#include <set>
 
 #include "display_list.h"
 
@@ -689,6 +691,12 @@ namespace {
     // Left as they are where no strips join, or where the commands that would replace them don't fit in their place.
     void join_strips(uint8_t* rdram, gpr gfx, gpr start) {
         gpr end = (int32_t)MEM_W(0, gfx);
+        if ((start != 0) && (end > start) && ((end - start) / 8 > SPRITE_COMMANDS)) {
+            static int big = 0;
+            if (big++ < 20) {
+                printf("DIAGSTRIP big sprite %d commands\n", (int)((end - start) / 8));
+            }
+        }
         if ((start == 0) || (end <= start) || ((end - start) / 8 > SPRITE_COMMANDS)) {
             return;
         }
@@ -751,6 +759,23 @@ namespace {
         for (size_t k = 0; k + 1 < strips.size(); k++) {
             joins[k] = join_height(strips[k], strips[k + 1]);
             any = any || (joins[k] != 0);
+        }
+        if (strips.size() >= 2) {
+            static std::set<uint64_t> seen;
+            static int lines = 0;
+            const Strip& f = strips[0];
+            uint64_t key = ((uint64_t)strips.size() << 48) ^ ((uint64_t)(uint32_t)f.dtdy << 32) ^
+                           ((uint64_t)(uint32_t)f.dsdx << 16) ^ (uint64_t)(f.xh - f.xl) ^ ((uint64_t)f.image.w1 << 20);
+            if ((lines < 400) && seen.insert(key).second) {
+                for (size_t k = 0; (k < strips.size()) && (lines < 400); k++, lines++) {
+                    const Strip& a = strips[k];
+                    printf("DIAGSTRIP n=%d k=%d tile=%d rect=%d,%d-%d,%d st=%d,%d d=%d,%d img=%08x,%08x load=%08x,%08x "
+                           "size=%08x,%08x tile=%08x,%08x join=%d whole=%d\n",
+                           (int)strips.size(), (int)k, a.tile, a.xl, a.yl, a.xh, a.yh, a.s, a.t, a.dsdx, a.dtdy,
+                           a.image.w0, a.image.w1, a.load.w0, a.load.w1, a.size.w0, a.size.w1, a.own_tile.w0,
+                           a.own_tile.w1, (int)joins[k], (int)whole_rows(a));
+                }
+            }
         }
         if (!any) {
             return;
