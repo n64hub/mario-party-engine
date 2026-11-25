@@ -764,10 +764,14 @@ namespace {
             static std::set<uint64_t> seen;
             static int lines = 0;
             const Strip& f = strips[0];
-            uint64_t key = ((uint64_t)strips.size() << 48) ^ ((uint64_t)(uint32_t)f.dtdy << 32) ^
-                           ((uint64_t)(uint32_t)f.dsdx << 16) ^ (uint64_t)(f.xh - f.xl) ^ ((uint64_t)f.image.w1 << 20);
-            if ((lines < 400) && ((f.dtdy < 1024) || (f.dsdx < 1024)) && seen.insert(key).second) {
-                for (size_t k = 0; (k < strips.size()) && (lines < 400); k++, lines++) {
+            bool broken = false;
+            for (size_t k = 0; k + 1 < strips.size(); k++) {
+                broken = broken || (joins[k] == 0);
+            }
+            uint64_t key = ((uint64_t)strips.size() << 48) ^ ((uint64_t)(uint32_t)f.yl << 32) ^
+                           ((uint64_t)(uint32_t)f.t << 16) ^ (uint64_t)(uint32_t)f.xl ^ ((uint64_t)(uint32_t)f.dtdy << 40);
+            if ((lines < 600) && broken && ((f.dtdy < 1024) || (f.dsdx < 1024)) && seen.insert(key).second) {
+                for (size_t k = 0; (k < strips.size()) && (lines < 600); k++, lines++) {
                     const Strip& a = strips[k];
                     printf("DIAGSTRIP n=%d k=%d tile=%d rect=%d,%d-%d,%d st=%d,%d d=%d,%d img=%08x,%08x load=%08x,%08x "
                            "size=%08x,%08x tile=%08x,%08x join=%d whole=%d\n",
