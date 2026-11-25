@@ -26,7 +26,6 @@
 #include "librecomp/helpers.hpp"
 #include <cstdio>
 #include <set>
-#include <tuple>
 
 namespace {
     constexpr uint32_t G_SETTILE = 0xF5;
@@ -124,7 +123,13 @@ extern "C" void mp_model_batch_end(uint8_t* rdram, gpr dl_head, gpr vertices_at,
     int32_t last_s = clamped_last(tile.clamp_s, tile.reach_s, tile.last_s);
     int32_t last_t = clamped_last(tile.clamp_t, tile.reach_t, tile.last_t);
     uint32_t w1 = (uint32_t)MEM_W(4, tile.size);
-    { static std::set<std::tuple<uint32_t,int,int,int,int>> seen; if ((last_s != tile.last_s || last_t != tile.last_t) && seen.insert({(uint32_t)tile.texture, tile.last_s, tile.last_t, last_s, last_t}).second) printf("MPCLAMP tex=%08X tile=%d,%d -> %d,%d reach=%d,%d
-", (uint32_t)tile.texture, tile.last_s, tile.last_t, last_s, last_t, tile.reach_s, tile.reach_t); }
+    if (last_s != tile.last_s || last_t != tile.last_t) {
+        static std::set<uint64_t> seen;
+        uint64_t key = ((uint64_t)(uint32_t)tile.texture << 32) | ((uint64_t)(last_s & 0xFFF) << 12) | (uint64_t)(last_t & 0xFFF);
+        if (seen.insert(key).second) {
+            fprintf(stderr, "MPCLAMP tex=%08X tile=%d,%d to %d,%d reach=%d,%d\n", (unsigned)(uint32_t)tile.texture,
+                    (int)tile.last_s, (int)tile.last_t, (int)last_s, (int)last_t, (int)tile.reach_s, (int)tile.reach_t);
+        }
+    }
     MEM_W(4, tile.size) = (int32_t)((w1 & 0xFF000000) | ((uint32_t)(last_s << 2) << 12) | (uint32_t)(last_t << 2));
 }
