@@ -17,6 +17,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
 
 - `src/process_threads.cpp` and `patches/process.c`: the engine's process scheduler on native threads, one per live
   process, run one at a time, on the desktop and in a browser alike ([docs/processes.md](docs/processes.md)).
+  `src/process_threads.h` declares `mp_prc_started()` for a game's own code: the processes that have started, so a
+  game knows when a snapshot of RDRAM holds all of its state (for netplay).
 - `patches/camera_view.c`: a camera's view past 4:3, its scissor to the window's edges and a board's pan moved from
   its viewport into its projection, so the 3D widens without stretching and pans with the board at the display's rate.
   A game's patches of the two functions that start a camera's view call it. In a scene drawn at 4:3, a camera's
