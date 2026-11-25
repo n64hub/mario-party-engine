@@ -835,7 +835,31 @@ static void reach_start(uint8_t* rdram, gpr gfx) {
     emit(rdram, gfx, commands, 5);
 }
 
+// Ends a sprite reach_start began: its x put back where the game had it, and the window's alignment and the game's
+// own scissor back on.
+static void reach_end(uint8_t* rdram, gpr gfx) {
+    sprite_reaching = false;
+    GfxCommand commands[7];
+    int count = 0;
+    gEXEnable(&commands[count++]);
+    if (sprite_moved != 0) {
+        MEM_H(0, sprite_moved) = (int16_t)(MEM_H(0, sprite_moved) - sprite_reach);
+        sprite_moved = 0;
+        gEXSetRectAlign(&commands[count], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
+        count += 2;
+    }
+    scissor_own(&commands[count]);
+    count += 3;
+    whole_screen(&commands[count++]);
+    emit(rdram, gfx, commands, count);
+}
+
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
+    // A sprite the game left without reaching mp_hud_sprite_end (one wholly off the screen, dropped before it's drawn)
+    // still has its x moved: put back now, as a moved x the game adds to each frame would otherwise keep it.
+    if (sprite_reaching) {
+        reach_end(rdram, gfx);
+    }
     sprite_start = (int32_t)MEM_W(0, gfx);
     // A picture as wide as the screen: never a panel's, which is a third of it.
     float width = sprite_width;
@@ -1022,20 +1046,7 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
         return;
     }
     if (sprite_reaching) {
-        sprite_reaching = false;
-        GfxCommand commands[7];
-        int count = 0;
-        gEXEnable(&commands[count++]);
-        if (sprite_moved != 0) {
-            MEM_H(0, sprite_moved) = (int16_t)(MEM_H(0, sprite_moved) - sprite_reach);
-            sprite_moved = 0;
-            gEXSetRectAlign(&commands[count], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
-            count += 2;
-        }
-        scissor_own(&commands[count]);
-        count += 3;
-        whole_screen(&commands[count++]);
-        emit(rdram, gfx, commands, count);
+        reach_end(rdram, gfx);
         return;
     }
     if (!sprite_aligned) {
