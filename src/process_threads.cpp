@@ -26,6 +26,7 @@
 //   recomp_prc_yield()                   from a process: back to the scheduler until it is resumed
 //   recomp_prc_exit()                    from a process: it has ended; never returns
 //   recomp_prc_reset()                   ends every process's thread (the scheduler's init)
+// And one for the host's own code, which no patch calls: mp_prc_started(keys, most), the processes that have a thread.
 //
 // Built with MP_PROCESS_STATS (CMake option of that name), it prints every 5 seconds how many processes are alive, how
 // many resumes a second the scheduler makes, and what a resume costs beyond the process's own run: two handoffs.
@@ -307,4 +308,20 @@ extern "C" void recomp_prc_reset(uint8_t* rdram, recomp_context* ctx) {
         w->killed = true;
         run_until_back(w);
     }
+}
+
+// mp_prc_started(keys, most): the keys of the processes that have started, the ones on a native thread of their own,
+// up to most of them into keys; returns how many there are, so a caller whose most was too small knows. A process
+// not started yet is only its jmp_buf and stack in RDRAM, where a started one has state on its thread's native stack
+// too. Read-only, for a host's own code (a save state or netplay snapshot): nothing in the engine calls it.
+extern "C" size_t mp_prc_started(uint32_t* keys, size_t most) {
+    std::lock_guard lock{ workers_mutex };
+    size_t i = 0;
+    for (auto& [key, w] : running) {
+        if (i < most) {
+            keys[i] = key;
+        }
+        i++;
+    }
+    return i;
 }

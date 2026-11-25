@@ -56,7 +56,9 @@ with a header that says how they hand the baton over).
   with its setjmp and longjmp swapped for a native. A game whose `Process` names its fields differently would need
   more names there.
 - The natives in its `patches/syms.ld`, each at a dummy address that N64Recomp turns into a call of the C function of
-  that name: `recomp_prc_resume`, `recomp_prc_yield`, `recomp_prc_exit` and `recomp_prc_reset`.
+  that name: `recomp_prc_resume`, `recomp_prc_yield`, `recomp_prc_exit` and `recomp_prc_reset`. Not
+  `mp_prc_started(keys, most)`, which no patch calls: the host's own C++ code (a save state, a netplay snapshot) can
+  ask it which processes have started, so have state on a native thread's stack and not only in RDRAM.
 - The game calls setjmp and longjmp nowhere but in the four functions the patches replace, so its
   `src/game/libultra.cpp`'s setjmp aborts.
 
