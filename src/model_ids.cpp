@@ -89,8 +89,10 @@ namespace {
     constexpr int32_t PARTS = 1 << 12;
     constexpr int32_t QUEUE = 1024;
     // The IDs' own range, clear of G_EX_ID_IGNORE (0), G_EX_ID_AUTO (all ones) and the engine's other groups: the camera
-    // at bit 26, the slot's generation at 19, the slot at 12 and the part.
+    // at bit 26, the part's copy at 23, the slot's generation at 19, the slot at 12 and the part.
     constexpr uint32_t ID_BASE = 0x40000000;
+    // The copies of a part a model's walk tells apart (the header says why): a copy past them is left untagged.
+    constexpr uint32_t COPIES = 8;
     // Commands a tag takes: a gEXEnable, the group (two) and its pop.
     constexpr int32_t TAG_BYTES = 4 * 8;
     // gbi.h's G_MTX_MODELVIEW, for a group of the modelview.
@@ -103,6 +105,10 @@ namespace {
     int32_t walking = -1;
     gpr walking_data = 0;
     uint32_t walking_camera = 0;
+    // The walk each part was last queued in (a count of the walks), and how many times in it.
+    uint32_t walks = 0;
+    uint32_t part_walk[PARTS];
+    uint32_t part_copies[PARTS];
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
     bool pushed = false;
@@ -337,6 +343,7 @@ extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) 
     walking = slot;
     walking_data = data;
     walking_camera = (uint32_t)camera;
+    walks++;
 }
 
 extern "C" void mp_model_slot_end(uint8_t*) {
@@ -351,7 +358,16 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
         queued[place] = 0;
         return;
     }
-    queued[place] = ID_BASE | (walking_camera << 26) | ((slot_generation[walking] & 0x7F) << 19) |
+    if (part_walk[part] != walks) {
+        part_walk[part] = walks;
+        part_copies[part] = 0;
+    }
+    uint32_t copy = part_copies[part]++;
+    if (copy >= COPIES) {
+        queued[place] = 0;
+        return;
+    }
+    queued[place] = ID_BASE | (walking_camera << 26) | (copy << 23) | ((slot_generation[walking] & 0xF) << 19) |
                     ((uint32_t)walking << 12) | (uint32_t)part;
 }
 
