@@ -79,6 +79,15 @@
 // past its own edges the same way, over what its scene, its wipes and its pictures as wide as the screen draw there,
 // which are drawn as a wide picture's are.
 //
+// Mario Party 2 keeps a table of up to four rectangles of a colour of their own, drawn over the screen as the frame's
+// text is (its func_8007CA0C_7D60C): the opening theater dims its stage with one as wide as the screen in see-through
+// black, around the character under the spotlight. Its scissor is the whole screen's, but the camera's past 4:3 keeps
+// RT64 from stretching it, so the stage beside 4:3 stayed bright, with a seam at 4:3's edges. mp_wipe_screen_rect,
+// where the game has written one of them (a fill rectangle, the command before the list's next), given the next
+// command, carries one from the screen's left edge to its right out past the window's edges as mp_wipe_fill_start does
+// the wipe's, under the wide scissor, and returns the list's next command after it. A narrower one, or any in a 4:3
+// picture, is left as the game drew it.
+//
 // In a 4:3 window the rectangles cover nothing past the screen. RT64 reads extended commands only after a gEXEnable in
 // the same display list, so each start sends one.
 
@@ -347,6 +356,34 @@ extern "C" gpr mp_wipe_shape_scale(uint8_t* rdram, gpr scale) {
     value *= picture_half() / HALF;
     std::memcpy(&bits, &value, sizeof(bits));
     return (gpr)(int32_t)bits;
+}
+
+extern "C" gpr mp_wipe_screen_rect(uint8_t* rdram, gpr at) {
+    // The game's fill rectangle, the command before at: its edges in quarter pixels.
+    gpr rect = at - 8;
+    uint32_t word0 = (uint32_t)MEM_W(0, rect);
+    uint32_t word1 = (uint32_t)MEM_W(4, rect);
+    int32_t ulx = (int32_t)((word1 >> 12) & 0xFFF);
+    int32_t lrx = (int32_t)((word0 >> 12) & 0xFFF);
+    if (((word0 >> 24) != 0xF6) || picture_is_4x3() || (ulx != 0) || (lrx < (SCREEN_W - 1) * 4)) {
+        return at;
+    }
+
+    GfxCommand commands[10];
+    gEXEnable(&commands[0]);
+    push_wide_scissor(&commands[1]);
+    // From 0 to the screen's right edge: its left edge WIDE left of 4:3's, its right edge WIDE right of it.
+    gEXSetRectAlign(&commands[4], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0, (WIDE - HALF) * 4, 0);
+    commands[6].values.word0 = word0;
+    commands[6].values.word1 = word1;
+    rect_own(&commands[7]);
+    gEXPopScissor(&commands[9]);
+    for (const GfxCommand& command : commands) {
+        MEM_W(0, rect) = command.values.word0;
+        MEM_W(4, rect) = command.values.word1;
+        rect += 8;
+    }
+    return rect;
 }
 
 extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
