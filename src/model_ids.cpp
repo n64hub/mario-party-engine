@@ -25,12 +25,15 @@
 //   of one part, the coin bags as 3 and a model of its field up to 9, 5 to 19 copies a frame in all. Under one ID, a
 //   frame held several matrices for RT64 to pair with the frame before's, and a copy was drawn in the frames between
 //   partway to another copy's matrix. So each copy has an ID of its own, which holds its number: that of the copy of
-//   its part the frame before that it lies nearest (mp_model_push), or one no copy had. Not the how-manyth it is in the
-//   walk: when a block breaks, the walk leaves its copy out, and the copies after it took each the number of the one
-//   before, so the blocks left were each drawn in the frame between halfway to the next one's place. A copy matches
-//   one of the frame before that lies less than a tenth of its distance from the eye away (as a blink's move, below),
-//   and a copy no other lies that near gets a number of its own, so it isn't interpolated. Past 32 copies, a part is
-//   left untagged.
+//   its part the frame before that lies nearest where that copy's step of the frame before goes on to (mp_model_push),
+//   or one no copy had. Not the how-manyth it is in the walk: when a block breaks, the walk leaves its copy out, and the
+//   copies after it took each the number of the one before, so the blocks left were each drawn in the frame between
+//   halfway to the next one's place. A copy takes another's number within a fiftieth of its distance from the eye of
+//   where that one's step goes on to, or within a quarter of it of where one first drawn the frame before was (the
+//   blocks fly in from the eye at the start, a tenth of their distance a frame), so a copy that comes into the walk
+//   ahead of one at rest, a block's length away, gets a number of its own, and isn't interpolated. A part drawn once,
+//   as it was the frame before, keeps its one number unless it moved a tenth of its distance from the eye (a block
+//   that lands, or breaks and is put away far below). Past 32 copies, a part is left untagged.
 // - mp_model_push just before the part's gSPMatrix, with the list's next command, its place in the queue, its matrix,
 //   the frame's number and the list's start and size: the tag (a gEXEnable and the group, pushed, G_EX_PUSH) at the
 //   list's next command, which it returns after itself. RT64 reads extended commands only after a gEXEnable, and
@@ -184,15 +187,29 @@ namespace {
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
 
-    // A part's copies (its ID less the copy) drawn in a frame, each number's origin, and those of the frame before.
+    // A part's copies (its ID less the copy): how many its model's last walk queued, and those drawn in a frame, each
+    // number's origin and its step from the frame before (where its number was drawn then), and those of the frame
+    // before.
+    struct Copy {
+        float origin[3];
+        float step[3];
+    };
     struct Copies {
+        uint32_t walk;
+        int32_t walked;
         int32_t frame;
         uint32_t taken;
-        float now[COPIES][3];
+        uint32_t stepped;
+        Copy now[COPIES];
         uint32_t had;
-        float before[COPIES][3];
+        uint32_t had_stepped;
+        Copy before[COPIES];
     };
     std::unordered_map<uint32_t, Copies> copies;
+    // How far a copy may lie from where its step of the frame before puts it, to take that copy's number: a fiftieth of
+    // its distance from the eye, and a quarter of it from where a copy first drawn in the frame before was.
+    constexpr float COPY_NEAR = 0.02f;
+    constexpr float COPY_NEW = 0.25f;
 
     // The frame's tags so far: where each part's origin is in its camera's view, where its group command is in the
     // list, whether it is drawn at its own matrix, and whether it turned more than 75 degrees, going on with its turn.
@@ -380,43 +397,58 @@ namespace {
 
     // The copy's number (the header says how it is chosen), or -1 where the part's 32 are all drawn in the frame.
     int32_t copy_number(uint32_t part_id, const float origin[3], int32_t frame) {
-        if (copies.size() > SLOTS * 64) {
-            for (auto it = copies.begin(); it != copies.end();) {
-                it = ((frame - it->second.frame) > 60) ? copies.erase(it) : std::next(it);
-            }
-        }
         auto found = copies.find(part_id);
         if (found == copies.end()) {
             found = copies.emplace(part_id, Copies{}).first;
             found->second.frame = frame - 2;
+            found->second.walked = 1;
         }
         Copies& c = found->second;
         if (c.frame != frame) {
-            c.had = (c.frame == (frame - 1)) ? c.taken : 0;
+            bool last = (c.frame == (frame - 1));
+            c.had = last ? c.taken : 0;
+            c.had_stepped = last ? c.stepped : 0;
             for (int i = 0; i < COPIES; i++) {
-                for (int k = 0; k < 3; k++) {
-                    c.before[i][k] = c.now[i][k];
-                }
+                c.before[i] = c.now[i];
             }
             c.taken = 0;
+            c.stepped = 0;
             c.frame = frame;
         }
         int32_t best = -1;
-        float best_distance = 0.0f;
-        for (int i = 0; i < COPIES; i++) {
-            if (!(c.had & (1u << i)) || (c.taken & (1u << i)) || blink_far(c.before[i], origin)) {
-                continue;
-            }
-            float d = 0.0f;
-            for (int k = 0; k < 3; k++) {
-                d += (c.before[i][k] - origin[k]) * (c.before[i][k] - origin[k]);
-            }
-            if ((best < 0) || (d < best_distance)) {
-                best = i;
-                best_distance = d;
-            }
+        bool matched = false;
+        if ((c.walked <= 1) && ((c.had & ~1u) == 0)) {
+            // A part drawn once, as it was the frame before: its one number, unless it moved a tenth of its distance
+            // from the eye or more (a block that flies in, or that breaks and is put away), so it isn't drawn between.
+            matched = ((c.had & 1u) != 0) && !(c.taken & 1u) && !blink_far(c.before[0].origin, origin);
+            best = matched ? 0 : -1;
         }
-        // One no copy had the frame before, so another copy still to come can have its own, or else any left.
+        else {
+            float reach = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                reach += origin[k] * origin[k];
+            }
+            reach = std::sqrt(reach);
+            float best_share = 0.0f;
+            for (int i = 0; i < COPIES; i++) {
+                if (!(c.had & (1u << i)) || (c.taken & (1u << i))) {
+                    continue;
+                }
+                bool stepped = (c.had_stepped & (1u << i)) != 0;
+                float d = 0.0f;
+                for (int k = 0; k < 3; k++) {
+                    float to = c.before[i].origin[k] + (stepped ? c.before[i].step[k] : 0.0f);
+                    d += (origin[k] - to) * (origin[k] - to);
+                }
+                float share = std::sqrt(d) / ((stepped ? COPY_NEAR : COPY_NEW) * reach + 0.01f);
+                if ((share <= 1.0f) && ((best < 0) || (share < best_share))) {
+                    best = i;
+                    best_share = share;
+                }
+            }
+            matched = best >= 0;
+        }
+        // One no copy had the frame before, so a copy still to come can have its own, or else any left.
         for (int i = 0; (best < 0) && (i < COPIES); i++) {
             if (!((c.taken | c.had) & (1u << i))) {
                 best = i;
@@ -430,8 +462,10 @@ namespace {
         if (best >= 0) {
             c.taken |= 1u << best;
             for (int k = 0; k < 3; k++) {
-                c.now[best][k] = origin[k];
+                c.now[best].step[k] = matched ? (origin[k] - c.before[best].origin[k]) : 0.0f;
+                c.now[best].origin[k] = origin[k];
             }
+            c.stepped |= matched ? (1u << best) : 0u;
         }
         return best;
     }
@@ -538,6 +572,20 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
     queued[place] = ID_BASE | (walking_camera << CAMERA_SHIFT) |
                     ((slot_generation[walking] & (GENERATIONS - 1)) << GENERATION_SHIFT) |
                     ((uint32_t)walking << MODEL_SHIFT) | (uint32_t)part;
+    if (copies.size() > SLOTS * 64) {
+        for (auto it = copies.begin(); it != copies.end();) {
+            it = ((walk_number - it->second.walk) > (uint32_t)(SLOTS * 60)) ? copies.erase(it) : std::next(it);
+        }
+    }
+    Copies& c = copies[queued[place]];
+    if (c.walk != walk_number) {
+        if (c.walked == 0) {
+            c.frame = -2;
+        }
+        c.walk = walk_number;
+        c.walked = 0;
+    }
+    c.walked++;
 }
 
 // The group's two commands at the address: the part interpolated (its components AUTO, and its place INTERPOLATE where
