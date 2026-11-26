@@ -58,7 +58,14 @@
 // on so at the place of another model's part (as below) is still drawn at its own matrix, and the parts at its place
 // with it: two models at one place are one thing the game put somewhere else, where a foot turns alone.
 //
-// And a part drawn at its own matrix (new, mirrored or turned far) draws every other part at the same place (its
+// Nor is a part that blinks: moved a tenth of its distance from the eye or more in a frame, back to its place of the
+// frame before that (within a hundredth of its distance, as below). Mario Party 1's Coin Block Bash blinks a player
+// the hammer hit by putting them about 2,100 units off, near the eye and out of view, every other frame, each step as
+// long as the one before, so RT64 didn't take it for a jump: the frames between drew the player halfway, by the
+// field's near fence, and they seemed to warp. A player's every part blinks so, 0.4 of its distance or more, while the
+// parts that go back and forth otherwise there (a coin bag bouncing, a part shaking) move under 0.05.
+//
+// And a part drawn at its own matrix (new, mirrored, turned far or blinking) draws every other part at the same place (its
 // origin within a hundredth of its distance from the eye, the same camera) at its own too, in that frame, those tagged
 // before it (their group rewritten in the list) and after it: what the game draws as one thing in two models stays
 // in one piece. The setup's star, turned face on, swaps its back for the BONUS dial, another model, put there at the
@@ -146,11 +153,15 @@ namespace {
         int8_t sign;
     };
     // An ID's pose in the frame it was last drawn, and the axis it turned about since the frame before that (1 long), where
-    // that turn was 10 degrees or more and interpolated, or 0.
+    // that turn was 10 degrees or more and interpolated, or 0. Its origin in that frame, and in the frame it was drawn
+    // in before that.
     struct Seen {
         int32_t frame;
         Pose pose;
         float spin[3];
+        float origin[3];
+        int32_t before_frame;
+        float before[3];
     };
     // 1 + 2 cos(75 degrees): the trace of a turn of 75 degrees.
     constexpr float TURN_TRACE = 1.5176f;
@@ -160,6 +171,9 @@ namespace {
     constexpr float SPIN_AXIS = 0.3473f;
     // cos(30 degrees): how near a turn's axis is to the one before, at least, to go on with it.
     constexpr float SPIN_SAME = 0.8660f;
+    // How far a part moved in a frame, at least, for its move back to where it was the frame before to be a blink: a tenth
+    // of its distance from the eye.
+    constexpr float BLINK = 0.1f;
     // 4 (1 - cos(0.25 degrees)): the sum of a pose's axes' squared differences from one turned a quarter of a degree
     // from it.
     constexpr float TURNING = 3.81e-5f;
@@ -337,12 +351,27 @@ namespace {
         return jumped;
     }
 
+    // Whether a part moved from one origin to the other as far as a blink (a tenth of its distance from the eye or more).
+    bool blink_far(const float a[3], const float b[3]) {
+        float d = 0.0f;
+        float la = 0.0f;
+        float lb = 0.0f;
+        for (int c = 0; c < 3; c++) {
+            d += (a[c] - b[c]) * (a[c] - b[c]);
+            la += a[c] * a[c];
+            lb += b[c] * b[c];
+        }
+        return std::sqrt(d) > (BLINK * std::sqrt(std::fmax(la, lb)));
+    }
+
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
     // before, or the other way round, or it turned more than 75 degrees since the frame before, unless that goes on
-    // with its turn of the frame before (the header says how). Whether it turned at all since the frame before goes in
-    // turned, and whether it turned more than 75 degrees, going on with its turn, in went_on. IDs not drawn for a
-    // second are forgotten.
-    bool interpolated(uint32_t id, const Pose& now, int32_t frame, bool& paired, bool& turned, bool& went_on) {
+    // with its turn of the frame before (the header says how), or it blinked: it moved a tenth of its distance from the
+    // eye or more since the frame before, back to its place of the frame before that. Whether it turned at all since
+    // the frame before goes in turned, and whether it turned more than 75 degrees, going on with its turn, in went_on.
+    // IDs not drawn for a second are forgotten.
+    bool interpolated(uint32_t id, const Pose& now, const float origin[3], int32_t frame, bool& paired, bool& turned,
+                      bool& went_on) {
         if (frame != seen_frame) {
             if (seen.size() > SLOTS * 64) {
                 for (auto it = seen.begin(); it != seen.end();) {
@@ -355,9 +384,18 @@ namespace {
         paired = (it != seen.end()) && (it->second.frame == frame - 1);
         turned = paired && turning(it->second.pose, now);
         went_on = false;
-        Seen next{ frame, now, { 0.0f, 0.0f, 0.0f } };
+        Seen next{ frame, now, { 0.0f, 0.0f, 0.0f }, { origin[0], origin[1], origin[2] }, 0, { 0.0f, 0.0f, 0.0f } };
+        next.before_frame = (it != seen.end()) ? it->second.frame : (frame - 2);
         bool far = false;
+        bool blinked = false;
+        if (it != seen.end()) {
+            for (int c = 0; c < 3; c++) {
+                next.before[c] = it->second.origin[c];
+            }
+        }
         if (paired) {
+            blinked = (it->second.before_frame == frame - 2) && blink_far(it->second.origin, origin) &&
+                      same_place(it->second.before, origin);
             float axis[3];
             float trace = turn_between(it->second.pose, now, axis);
             float length = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
@@ -372,7 +410,7 @@ namespace {
                 }
             }
         }
-        bool same = (it == seen.end()) || ((it->second.pose.sign == now.sign) && !far);
+        bool same = (it == seen.end()) || ((it->second.pose.sign == now.sign) && !far && !blinked);
         seen[id] = next;
         return same && (now.sign != 0);
     }
@@ -457,10 +495,14 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     uint32_t id = queued[place];
     uint32_t camera = camera_of(id);
     Pose now = pose(rdram, mtx);
+    float origin[3];
+    for (int c = 0; c < 3; c++) {
+        origin[c] = element(rdram, mtx, 12 + c);
+    }
     bool paired = false;
     bool turned = false;
     bool went_on = false;
-    bool keep = interpolated(id, now, frame, paired, turned, went_on) && !cut[camera];
+    bool keep = interpolated(id, now, origin, frame, paired, turned, went_on) && !cut[camera];
 
     // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
     // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
@@ -476,7 +518,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     Placed here;
     here.id = id;
     for (int c = 0; c < 3; c++) {
-        here.origin[c] = element(rdram, mtx, 12 + c);
+        here.origin[c] = origin[c];
     }
     here.own = (now.sign != 0) && (!keep || !paired);
     here.went_on = went_on && keep;
