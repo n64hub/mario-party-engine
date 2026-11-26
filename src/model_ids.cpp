@@ -88,12 +88,36 @@
 // commands a part: a part whose tag would leave less than a quarter of the list after it is left untagged, for RT64 to
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <unordered_map>
 
 #include "display_list.h"
 
 namespace {
+    // WIP: a log of each frame's tags (to be taken out).
+    struct Stats {
+        int32_t queued, q_unwalked, q_over, q_max, gens;
+        int32_t pushes, untagged, room, placed_over, own, unpaired, fresh, kept, far, cut, turned_cam[8], parts_cam[8];
+        int32_t room_left;
+    };
+    Stats stats{};
+    int32_t stats_frame = -1;
+    void stats_flush(int32_t frame) {
+        if ((stats_frame >= 0) && (stats.pushes > 0)) {
+            fprintf(stderr,
+                    "[mpid] f%d q%d unw%d over%d max%d gen%d | push%d untag%d room%d pover%d own%d unp%d new%d kept%d far%d "
+                    "cut%d left%d c0 %d/%d c1 %d/%d c2 %d/%d\n",
+                    stats_frame, stats.queued, stats.q_unwalked, stats.q_over, stats.q_max, stats.gens, stats.pushes,
+                    stats.untagged, stats.room, stats.placed_over, stats.own, stats.unpaired, stats.fresh, stats.kept,
+                    stats.far, stats.cut, stats.room_left, stats.turned_cam[0], stats.parts_cam[0], stats.turned_cam[1],
+                    stats.parts_cam[1], stats.turned_cam[2], stats.parts_cam[2]);
+        }
+        stats = Stats{};
+        stats_frame = frame;
+    }
+
     constexpr int32_t SLOTS = 128;
     constexpr int32_t CAMERAS = 8;
     // The parts of a model told apart, and the queue's places kept.
@@ -373,6 +397,7 @@ extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) 
         return;
     }
     if (slot_data[slot] != data) {
+        stats.gens++;
         slot_data[slot] = data;
         slot_generation[slot]++;
     }
@@ -386,10 +411,14 @@ extern "C" void mp_model_slot_end(uint8_t*) {
 }
 
 extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model) {
+    stats.queued++;
+    stats.q_max = std::max(stats.q_max, place);
     if ((place < 0) || (place >= QUEUE)) {
+        stats.q_over++;
         return;
     }
     if ((walking < 0) || (model != walking_data) || (part < 0) || (part >= PARTS)) {
+        stats.q_unwalked++;
         queued[place] = 0;
         return;
     }
@@ -415,10 +444,17 @@ static void group(uint8_t* rdram, gpr at, uint32_t id, bool keep, bool turned) {
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                               int32_t list_bytes) {
     pushed = false;
+    if (frame != stats_frame) {
+        stats_flush(frame);
+    }
+    stats.pushes++;
+    stats.room_left = (int32_t)(list + list_bytes - at);
     if ((place < 0) || (place >= QUEUE) || (queued[place] == 0)) {
+        stats.untagged++;
         return at;
     }
     if (((int32_t)(list + list_bytes - at) - TAG_BYTES) < (list_bytes / 4)) {
+        stats.room++;
         return at;
     }
     uint32_t id = queued[place];
@@ -427,7 +463,12 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     bool paired = false;
     bool turned = false;
     bool went_on = false;
+    bool fresh = (seen.find(id) == seen.end());
     bool keep = interpolated(id, now, frame, paired, turned, went_on) && !cut[camera];
+    stats.fresh += fresh ? 1 : 0;
+    stats.unpaired += paired ? 0 : 1;
+    stats.cut += cut[camera] ? 1 : 0;
+    stats.far += (paired && !keep && !cut[camera]) ? 1 : 0;
 
     // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
     // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
@@ -511,6 +552,13 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     if (placed_count < PLACED) {
         placed[placed_count++] = here;
     }
+    else {
+        stats.placed_over++;
+    }
+    stats.own += here.own ? 1 : 0;
+    stats.kept += keep ? 1 : 0;
+    stats.parts_cam[camera] = paired_parts[camera];
+    stats.turned_cam[camera] = turned_parts[camera];
     pushed = true;
     return at;
 }
