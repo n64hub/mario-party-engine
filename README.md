@@ -73,6 +73,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   between, not put at its new place where it moved far after resting, as RT64 otherwise does: the camera's view is in
   each part's matrix, so as a camera turned from rest the far parts jumped and the near ones didn't (Mario Party 1's
   Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table).
+  A minigame's own effects, drawn from a table of its own outside the model walk (`mp_effect_push`, `mp_effect_pop`),
+  are tagged a slot each, and drawn at their own matrix where a slot is new or handed on to another effect: untagged,
+  Coin Block Bash's coins, puffs and shadows were paired with each other as they came and went, a coin drawn huge and
+  a shadow stretched into a line across the field in the frames between.
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
@@ -136,7 +140,8 @@ Anything else the games share comes here when a change needs it in more than one
   of a sprite), its board's panels, its message module's letters, a minigame's corner HUD and Bobsled Run's bar for `src/hud.cpp`, and
   the wipe module and the end of a frame's last display list for `src/wipe.cpp` (their headers say which functions),
   and where a walk and the map's view take their pace, for `src/board_options.cpp`, and the model walk, its queue and
-  the queue's draw for `src/model_ids.cpp` (its header says where).
+  the queue's draw for `src/model_ids.cpp` (its header says where), and a minigame's table of effects where it
+  draws one (Mario Party 1's Coin Block Bash).
 
 ## Changing it
 
