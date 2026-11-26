@@ -28,6 +28,14 @@
 //   own, so each tag sends one. mp_model_pop after the part's display list, with the list's next-command pointer: the
 //   tag popped. Nothing for an untagged part, or near the end of the list (below).
 //
+// A model's walk may queue the same part more than once, each copy at a place of its own: Mario Party 2's Mario Land
+// queues some of its room's parts three or four times a frame. With one ID for all its copies, RT64 paired one of them
+// with the frame before and took the others for new, drawn at their own matrix in the frames between (below) while the
+// rest of the room was drawn partway: on the stairway up to Mini-Game Land 21 of the room's 117 parts were, in every
+// frame of the climb, and the brick ceiling stood out sharp against the white it fades into. So each copy of a part in
+// a walk has an ID of its own, by its order in the walk, which is the same each frame; past 8 copies a part is left
+// untagged, for RT64 to pair.
+//
 // The part is interpolated as RT64 interpolates a matrix it pairs by itself (decomposed, each component its own
 // choice), except where its matrix collapses what it draws (a zero determinant: a game hides a part by scaling it to 0)
 // or mirrors it, and didn't in the frame before, or the other way round: there it is drawn at its own matrix, as RT64
@@ -89,7 +97,7 @@ namespace {
     constexpr int32_t PARTS = 1 << 12;
     constexpr int32_t QUEUE = 1024;
     // The IDs' own range, clear of G_EX_ID_IGNORE (0), G_EX_ID_AUTO (all ones) and the engine's other groups: the camera
-    // at bit 26, the part's copy at 23, the slot's generation at 19, the slot at 12 and the part.
+    // at bit 26, the part's copy at 23, the slot's generation (its last 4 bits) at 19, the slot at 12 and the part.
     constexpr uint32_t ID_BASE = 0x40000000;
     // The copies of a part a model's walk tells apart (the header says why): a copy past them is left untagged.
     constexpr uint32_t COPIES = 8;
