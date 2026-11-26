@@ -24,9 +24,13 @@
 //   drawn at a matrix of its own: Mario Party 1's Coin Block Bash draws the coins that burst from a block as 7 copies
 //   of one part, the coin bags as 3 and a model of its field up to 9, 5 to 19 copies a frame in all. Under one ID, a
 //   frame held several matrices for RT64 to pair with the frame before's, and a copy was drawn in the frames between
-//   partway to another copy's matrix. So each copy has an ID of its own, which holds the how-manyth it is of its part
-//   in the walk: the walk takes the model's nodes in the same order each frame. Past 32 copies, a part is left
-//   untagged.
+//   partway to another copy's matrix. So each copy has an ID of its own, which holds its number: that of the copy of
+//   its part the frame before that it lies nearest (mp_model_push), or one no copy had. Not the how-manyth it is in the
+//   walk: when a block breaks, the walk leaves its copy out, and the copies after it took each the number of the one
+//   before, so the blocks left were each drawn in the frame between halfway to the next one's place. A copy matches
+//   one of the frame before that lies less than a tenth of its distance from the eye away (as a blink's move, below),
+//   and a copy no other lies that near gets a number of its own, so it isn't interpolated. Past 32 copies, a part is
+//   left untagged.
 // - mp_model_push just before the part's gSPMatrix, with the list's next command, its place in the queue, its matrix,
 //   the frame's number and the list's start and size: the tag (a gEXEnable and the group, pushed, G_EX_PUSH) at the
 //   list's next command, which it returns after itself. RT64 reads extended commands only after a gEXEnable, and
@@ -179,6 +183,16 @@ namespace {
     constexpr float TURNING = 3.81e-5f;
     std::unordered_map<uint32_t, Seen> seen;
     int32_t seen_frame = 0;
+
+    // A part's copies (its ID less the copy) drawn in a frame, each number's origin, and those of the frame before.
+    struct Copies {
+        int32_t frame;
+        uint32_t taken;
+        float now[COPIES][3];
+        uint32_t had;
+        float before[COPIES][3];
+    };
+    std::unordered_map<uint32_t, Copies> copies;
 
     // The frame's tags so far: where each part's origin is in its camera's view, where its group command is in the
     // list, whether it is drawn at its own matrix, and whether it turned more than 75 degrees, going on with its turn.
@@ -364,6 +378,64 @@ namespace {
         return std::sqrt(d) > (BLINK * std::sqrt(std::fmax(la, lb)));
     }
 
+    // The copy's number (the header says how it is chosen), or -1 where the part's 32 are all drawn in the frame.
+    int32_t copy_number(uint32_t part_id, const float origin[3], int32_t frame) {
+        if (copies.size() > SLOTS * 64) {
+            for (auto it = copies.begin(); it != copies.end();) {
+                it = ((frame - it->second.frame) > 60) ? copies.erase(it) : std::next(it);
+            }
+        }
+        auto found = copies.find(part_id);
+        if (found == copies.end()) {
+            found = copies.emplace(part_id, Copies{}).first;
+            found->second.frame = frame - 2;
+        }
+        Copies& c = found->second;
+        if (c.frame != frame) {
+            c.had = (c.frame == (frame - 1)) ? c.taken : 0;
+            for (int i = 0; i < COPIES; i++) {
+                for (int k = 0; k < 3; k++) {
+                    c.before[i][k] = c.now[i][k];
+                }
+            }
+            c.taken = 0;
+            c.frame = frame;
+        }
+        int32_t best = -1;
+        float best_distance = 0.0f;
+        for (int i = 0; i < COPIES; i++) {
+            if (!(c.had & (1u << i)) || (c.taken & (1u << i)) || blink_far(c.before[i], origin)) {
+                continue;
+            }
+            float d = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                d += (c.before[i][k] - origin[k]) * (c.before[i][k] - origin[k]);
+            }
+            if ((best < 0) || (d < best_distance)) {
+                best = i;
+                best_distance = d;
+            }
+        }
+        // One no copy had the frame before, so another copy still to come can have its own, or else any left.
+        for (int i = 0; (best < 0) && (i < COPIES); i++) {
+            if (!((c.taken | c.had) & (1u << i))) {
+                best = i;
+            }
+        }
+        for (int i = 0; (best < 0) && (i < COPIES); i++) {
+            if (!(c.taken & (1u << i))) {
+                best = i;
+            }
+        }
+        if (best >= 0) {
+            c.taken |= 1u << best;
+            for (int k = 0; k < 3; k++) {
+                c.now[best][k] = origin[k];
+            }
+        }
+        return best;
+    }
+
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
     // before, or the other way round, or it turned more than 75 degrees since the frame before, unless that goes on
     // with its turn of the frame before (the header says how), or it blinked: it moved a tenth of its distance from the
@@ -457,15 +529,15 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
         part_walk[part] = walk_number;
         part_copies[part] = 0;
     }
-    uint32_t copy = part_copies[part];
-    if (copy >= (uint32_t)COPIES) {
+    if (part_copies[part] >= COPIES) {
         queued[place] = 0;
         return;
     }
     part_copies[part]++;
+    // The copy's number goes in as it is pushed (mp_model_push), by where it is drawn.
     queued[place] = ID_BASE | (walking_camera << CAMERA_SHIFT) |
                     ((slot_generation[walking] & (GENERATIONS - 1)) << GENERATION_SHIFT) |
-                    ((uint32_t)walking << MODEL_SHIFT) | (copy << COPY_SHIFT) | (uint32_t)part;
+                    ((uint32_t)walking << MODEL_SHIFT) | (uint32_t)part;
 }
 
 // The group's two commands at the address: the part interpolated (its components AUTO, and its place INTERPOLATE where
@@ -492,13 +564,17 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     if (((int32_t)(list + list_bytes - at) - TAG_BYTES) < (list_bytes / 4)) {
         return at;
     }
-    uint32_t id = queued[place];
-    uint32_t camera = camera_of(id);
     Pose now = pose(rdram, mtx);
     float origin[3];
     for (int c = 0; c < 3; c++) {
         origin[c] = element(rdram, mtx, 12 + c);
     }
+    int32_t copy = copy_number(queued[place], origin, frame);
+    if (copy < 0) {
+        return at;
+    }
+    uint32_t id = queued[place] | ((uint32_t)copy << COPY_SHIFT);
+    uint32_t camera = camera_of(id);
     bool paired = false;
     bool turned = false;
     bool went_on = false;
