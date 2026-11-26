@@ -20,13 +20,23 @@
 // - mp_model_queued where a part goes into the queue, with its place in the queue, its part number and its model: the
 //   part is tagged with the model that is being walked. A part queued outside a model's walk (a minigame's own) isn't,
 //   nor one of another model queued in its walk (a model held at one of its parts, or a part taken from another
-//   model), whose part number is that model's.
+//   model), whose part number is that model's, except in a course's draw (below).
+// - mp_model_course as a course's draw starts, with the camera, and mp_model_course_end as it returns. A minigame
+//   whose ground is a course of cells (Mario Party 1's Bobsled Run, its walls and track in six models of about a
+//   hundred parts) has the engine draw the cells near each camera's view before the models' walk, each part through one
+//   matrix for the whole course, the camera's. Untagged, RT64 paired those parts by its guess, and their bricks all
+//   look alike: a part was paired with one of the other camera's or its neighbour's as cells came into view, and in
+//   the frames between a wall came apart at its seams, a dark gap where it had stood. A course's part is tagged with
+//   its camera, its model (each model the draw queues numbered as it first comes) and its part. A part is drawn at
+//   one place in a course, so it is never one thing with another model's part at its place (below): a cell coming
+//   into view is new, and doesn't draw the course at its own matrix with it.
 // - mp_model_push just before the part's gSPMatrix, with the list's next command, its place in the queue, its matrix,
 //   the frame's number and the list's start and size: the tag (a gEXEnable and the group, pushed, G_EX_PUSH) at the
 //   list's next command, which it returns after itself. RT64 reads extended commands only after a gEXEnable, and
 //   forgets it at each gDPFullSync, which the draw sends between its layers when it splits them into tasks of their
 //   own, so each tag sends one. mp_model_pop after the part's display list, with the list's next-command pointer: the
-//   tag popped. Nothing for an untagged part, or near the end of the list (below).
+//   tag popped. Nothing for an untagged part, or near the end of the list (below), or for a part whose ID was
+//   already drawn in the frame (a part queued twice): it would read as new and its first as gone.
 //
 // The part is interpolated as RT64 interpolates a matrix it pairs by itself (decomposed, each component its own
 // choice), except where its matrix collapses what it draws (a zero determinant: a game hides a part by scaling it to 0)
@@ -88,44 +98,23 @@
 // commands a part: a part whose tag would leave less than a quarter of the list after it is left untagged, for RT64 to
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
-#include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <unordered_map>
 
 #include "display_list.h"
 
 namespace {
-    // WIP: a log of each frame's tags (to be taken out).
-    struct Stats {
-        int32_t queued, q_unwalked, q_over, q_max, gens;
-        int32_t pushes, untagged, room, placed_over, own, unpaired, fresh, kept, far, cut, turned_cam[8], parts_cam[8];
-        int32_t room_left;
-    };
-    Stats stats{};
-    int32_t stats_frame = -1;
-    void stats_flush(int32_t frame) {
-        if ((stats_frame >= 0) && (stats.pushes > 0)) {
-            fprintf(stderr,
-                    "[mpid] f%d q%d unw%d over%d max%d gen%d | push%d untag%d room%d pover%d own%d unp%d new%d kept%d far%d "
-                    "cut%d left%d c0 %d/%d c1 %d/%d c2 %d/%d\n",
-                    stats_frame, stats.queued, stats.q_unwalked, stats.q_over, stats.q_max, stats.gens, stats.pushes,
-                    stats.untagged, stats.room, stats.placed_over, stats.own, stats.unpaired, stats.fresh, stats.kept,
-                    stats.far, stats.cut, stats.room_left, stats.turned_cam[0], stats.parts_cam[0], stats.turned_cam[1],
-                    stats.parts_cam[1], stats.turned_cam[2], stats.parts_cam[2]);
-        }
-        stats = Stats{};
-        stats_frame = frame;
-    }
-
     constexpr int32_t SLOTS = 128;
     constexpr int32_t CAMERAS = 8;
     // The parts of a model told apart, and the queue's places kept.
     constexpr int32_t PARTS = 1 << 12;
     constexpr int32_t QUEUE = 1024;
     // The IDs' own range, clear of G_EX_ID_IGNORE (0), G_EX_ID_AUTO (all ones) and the engine's other groups: the camera
-    // at bit 26, the slot's generation at 19, the slot at 12 and the part.
+    // at bit 26, the slot's generation at 19, the slot at 12 and the part. A course's part has bit 29 and its model's
+    // number at 12 in place of the slot's.
     constexpr uint32_t ID_BASE = 0x40000000;
+    constexpr uint32_t ID_COURSE = 0x20000000;
+    constexpr uint32_t COURSE_MODELS = 1 << 14;
     // Commands a tag takes: a gEXEnable, the group (two) and its pop.
     constexpr int32_t TAG_BYTES = 4 * 8;
     // gbi.h's G_MTX_MODELVIEW, for a group of the modelview.
@@ -138,6 +127,9 @@ namespace {
     int32_t walking = -1;
     gpr walking_data = 0;
     uint32_t walking_camera = 0;
+    // The camera of the course being drawn, or -1, and each model a course's draw queued, numbered.
+    int32_t course_camera = -1;
+    std::unordered_map<gpr, uint32_t> course_models;
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
     bool pushed = false;
@@ -178,6 +170,7 @@ namespace {
         bool own;
         bool keep;
         bool went_on;
+        bool course;
     };
     constexpr size_t PLACED = 512;
     Placed placed[PLACED];
@@ -397,7 +390,6 @@ extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) 
         return;
     }
     if (slot_data[slot] != data) {
-        stats.gens++;
         slot_data[slot] = data;
         slot_generation[slot]++;
     }
@@ -410,15 +402,30 @@ extern "C" void mp_model_slot_end(uint8_t*) {
     walking = -1;
 }
 
+extern "C" void mp_model_course(uint8_t*, int32_t camera) {
+    course_camera = ((camera >= 0) && (camera < CAMERAS)) ? camera : -1;
+}
+
+extern "C" void mp_model_course_end(uint8_t*) {
+    course_camera = -1;
+}
+
 extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model) {
-    stats.queued++;
-    stats.q_max = std::max(stats.q_max, place);
     if ((place < 0) || (place >= QUEUE)) {
-        stats.q_over++;
+        return;
+    }
+    if ((walking < 0) && (course_camera >= 0) && (part >= 0) && (part < PARTS)) {
+        auto it = course_models.find(model);
+        if (it == course_models.end()) {
+            if (course_models.size() >= COURSE_MODELS) {
+                course_models.clear();
+            }
+            it = course_models.emplace(model, (uint32_t)course_models.size()).first;
+        }
+        queued[place] = ID_BASE | ID_COURSE | ((uint32_t)course_camera << 26) | (it->second << 12) | (uint32_t)part;
         return;
     }
     if ((walking < 0) || (model != walking_data) || (part < 0) || (part >= PARTS)) {
-        stats.q_unwalked++;
         queued[place] = 0;
         return;
     }
@@ -444,31 +451,23 @@ static void group(uint8_t* rdram, gpr at, uint32_t id, bool keep, bool turned) {
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                               int32_t list_bytes) {
     pushed = false;
-    if (frame != stats_frame) {
-        stats_flush(frame);
-    }
-    stats.pushes++;
-    stats.room_left = (int32_t)(list + list_bytes - at);
     if ((place < 0) || (place >= QUEUE) || (queued[place] == 0)) {
-        stats.untagged++;
         return at;
     }
     if (((int32_t)(list + list_bytes - at) - TAG_BYTES) < (list_bytes / 4)) {
-        stats.room++;
         return at;
     }
     uint32_t id = queued[place];
     uint32_t camera = (id >> 26) & (CAMERAS - 1);
+    auto last = seen.find(id);
+    if ((last != seen.end()) && (last->second.frame == frame)) {
+        return at;
+    }
     Pose now = pose(rdram, mtx);
     bool paired = false;
     bool turned = false;
     bool went_on = false;
-    bool fresh = (seen.find(id) == seen.end());
     bool keep = interpolated(id, now, frame, paired, turned, went_on) && !cut[camera];
-    stats.fresh += fresh ? 1 : 0;
-    stats.unpaired += paired ? 0 : 1;
-    stats.cut += cut[camera] ? 1 : 0;
-    stats.far += (paired && !keep && !cut[camera]) ? 1 : 0;
 
     // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
     // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
@@ -488,11 +487,14 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     here.own = (now.sign != 0) && (!keep || !paired);
     here.went_on = went_on && keep;
+    // A course's part is never one thing with another part at its place (the header says why).
+    here.course = (id & ID_COURSE) != 0;
+    size_t others = here.course ? 0 : placed_count;
     // A part turned more than 75 degrees, going on with its turn, at the place of another model's part, is drawn at
     // its own matrix after all (the header says why), and so are the parts at its place, below.
-    for (size_t i = 0; i < placed_count; i++) {
+    for (size_t i = 0; i < others; i++) {
         Placed& other = placed[i];
-        if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || ((other.id / PARTS) == (id / PARTS)) ||
+        if (other.course || (((other.id >> 26) & (CAMERAS - 1)) != camera) || ((other.id / PARTS) == (id / PARTS)) ||
             !same_place(other.origin, here.origin)) {
             continue;
         }
@@ -506,9 +508,9 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
             group(rdram, other.group, other.id, false, false);
         }
     }
-    for (size_t i = 0; i < placed_count; i++) {
+    for (size_t i = 0; i < others; i++) {
         Placed& other = placed[i];
-        if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || (other.own == here.own) ||
+        if (other.course || (((other.id >> 26) & (CAMERAS - 1)) != camera) || (other.own == here.own) ||
             !same_place(other.origin, here.origin)) {
             continue;
         }
@@ -552,13 +554,6 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     if (placed_count < PLACED) {
         placed[placed_count++] = here;
     }
-    else {
-        stats.placed_over++;
-    }
-    stats.own += here.own ? 1 : 0;
-    stats.kept += keep ? 1 : 0;
-    stats.parts_cam[camera] = paired_parts[camera];
-    stats.turned_cam[camera] = turned_parts[camera];
     pushed = true;
     return at;
 }
@@ -571,15 +566,4 @@ extern "C" void mp_model_pop(uint8_t* rdram, gpr gfx) {
     gEXPopMatrixGroup(&command, MODELVIEW);
     mp_display_list::emit(rdram, gfx, &command, 1);
     pushed = false;
-}
-
-// WIP: a part of another model queued in a walk, every 200th frame (to be taken out).
-int32_t mp_dbg_path = 0;
-extern "C" void mp_model_dbg_path(int32_t path) { mp_dbg_path = path; }
-extern "C" void mp_model_dbg(uint8_t*, gpr model, int32_t part, gpr ra, int32_t place) {
-    if ((stats_frame % 200) != 0) {
-        return;
-    }
-    fprintf(stderr, "[mpdbg] f%d slot%d data%08x model%08x part%d ra%08x place%d path%x%s\n", stats_frame, walking,
-            (uint32_t)walking_data, (uint32_t)model, part, (uint32_t)ra, place, mp_dbg_path, (model != walking_data) ? " FOREIGN" : "");
 }
