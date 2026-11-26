@@ -41,6 +41,17 @@
 // and the frames between drew them halfway, two faces at once. The parts of Mario Party 1's opening, menus and first
 // board turn under 60 degrees a frame but for 124 of 268,000, and those (the dice) 80 degrees or more.
 //
+// But a turn that far which goes on with the part's turn of the frame before is a turn: about the same axis (within 30
+// degrees, the axis as the camera sees it), the same way, where the turn before was 10 degrees or more and interpolated
+// itself, and under 135 degrees (a half turn has no one way to go). In Mario Party 3's opening, as the characters run
+// to the Millennium Star, a foot swings through 77 to 85 degrees in one frame of each step, after 33 to 65 the frame
+// before and 54 after, and drawn at its own matrix it stood still for the frame between and then stepped. A die never
+// goes on so, as it turns to its first face from rest and to each after from one it was put at, nor the setup star's
+// back, from rest. But the setup's stars, put back to start a spin, may: one went 25.7 degrees, then 77.1 and 51.4, and
+// the frame between drew it 38 degrees on and the card on its face at its own turn, the card twice. So a part that goes
+// on so at the place of another model's part (as below) is still drawn at its own matrix, and the parts at its place
+// with it: two models at one place are one thing the game put somewhere else, where a foot turns alone.
+//
 // And a part drawn at its own matrix (new, mirrored or turned far) draws every other part at the same place (its
 // origin within a hundredth of its distance from the eye, the same camera) at its own too, in that frame, those tagged
 // before it (their group rewritten in the list) and after it: what the game draws as one thing in two models stays
@@ -113,13 +124,21 @@ namespace {
         float axes[3][3];
         int8_t sign;
     };
-    // An ID's pose in the frame it was last drawn.
+    // An ID's pose in the frame it was last drawn, and the axis it turned about since the frame before that (1 long), where
+    // that turn was 10 degrees or more and interpolated, or 0.
     struct Seen {
         int32_t frame;
         Pose pose;
+        float spin[3];
     };
     // 1 + 2 cos(75 degrees): the trace of a turn of 75 degrees.
     constexpr float TURN_TRACE = 1.5176f;
+    // 1 + 2 cos(135 degrees): the trace of a turn of 135 degrees.
+    constexpr float FLIP_TRACE = -0.4142f;
+    // 2 sin(10 degrees): how long a turn's axis (below) is at 10 degrees.
+    constexpr float SPIN_AXIS = 0.3473f;
+    // cos(30 degrees): how near a turn's axis is to the one before, at least, to go on with it.
+    constexpr float SPIN_SAME = 0.8660f;
     // 4 (1 - cos(0.25 degrees)): the sum of a pose's axes' squared differences from one turned a quarter of a degree
     // from it.
     constexpr float TURNING = 3.81e-5f;
@@ -127,13 +146,14 @@ namespace {
     int32_t seen_frame = 0;
 
     // The frame's tags so far: where each part's origin is in its camera's view, where its group command is in the
-    // list, and whether it is drawn at its own matrix.
+    // list, whether it is drawn at its own matrix, and whether it turned more than 75 degrees, going on with its turn.
     struct Placed {
         uint32_t id;
         float origin[3];
         gpr group;
         bool own;
         bool keep;
+        bool went_on;
     };
     constexpr size_t PLACED = 512;
     Placed placed[PLACED];
@@ -195,16 +215,20 @@ namespace {
         return result;
     }
 
-    // Whether a part turned more than 75 degrees from one pose to the other: the sum of their axes' products is the
-    // trace of the turn between them, 1 + 2 cos(angle).
-    bool turned_far(const Pose& before, const Pose& now) {
-        float trace = 0.0f;
+    // The turn from one pose to the other (before's axes inverted, which is their transpose, times now's): its trace,
+    // 1 + 2 cos(angle), the sum of their axes' products, and its axis, from its antisymmetric part, 2 sin(angle) long.
+    float turn_between(const Pose& before, const Pose& now, float axis[3]) {
+        float t[3][3];
         for (int r = 0; r < 3; r++) {
             for (int c = 0; c < 3; c++) {
-                trace += before.axes[r][c] * now.axes[r][c];
+                t[r][c] = before.axes[0][r] * now.axes[0][c] + before.axes[1][r] * now.axes[1][c] +
+                          before.axes[2][r] * now.axes[2][c];
             }
         }
-        return trace < TURN_TRACE;
+        axis[0] = t[1][2] - t[2][1];
+        axis[1] = t[2][0] - t[0][2];
+        axis[2] = t[0][1] - t[1][0];
+        return t[0][0] + t[1][1] + t[2][2];
     }
 
     // Whether a part turned at all from one pose to the other (a quarter of a degree or more), told by its axes'
@@ -293,9 +317,11 @@ namespace {
     }
 
     // Whether the ID's matrix is interpolated: unless it collapses or mirrors what it draws and didn't in the frame
-    // before, or the other way round, or it turned more than 75 degrees since the frame before. Whether it turned at
-    // all since the frame before goes in turned. IDs not drawn for a second are forgotten.
-    bool interpolated(uint32_t id, const Pose& now, int32_t frame, bool& paired, bool& turned) {
+    // before, or the other way round, or it turned more than 75 degrees since the frame before, unless that goes on
+    // with its turn of the frame before (the header says how). Whether it turned at all since the frame before goes in
+    // turned, and whether it turned more than 75 degrees, going on with its turn, in went_on. IDs not drawn for a
+    // second are forgotten.
+    bool interpolated(uint32_t id, const Pose& now, int32_t frame, bool& paired, bool& turned, bool& went_on) {
         if (frame != seen_frame) {
             if (seen.size() > SLOTS * 64) {
                 for (auto it = seen.begin(); it != seen.end();) {
@@ -307,10 +333,26 @@ namespace {
         auto it = seen.find(id);
         paired = (it != seen.end()) && (it->second.frame == frame - 1);
         turned = paired && turning(it->second.pose, now);
-        bool same = (it == seen.end()) ||
-                    ((it->second.pose.sign == now.sign) &&
-                     ((it->second.frame != frame - 1) || !turned_far(it->second.pose, now)));
-        seen[id] = Seen{ frame, now };
+        went_on = false;
+        Seen next{ frame, now, { 0.0f, 0.0f, 0.0f } };
+        bool far = false;
+        if (paired) {
+            float axis[3];
+            float trace = turn_between(it->second.pose, now, axis);
+            float length = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+            const float* spin = it->second.spin;
+            bool going_on = (trace > FLIP_TRACE) && (length >= SPIN_AXIS) &&
+                            ((axis[0] * spin[0] + axis[1] * spin[1] + axis[2] * spin[2]) >= (SPIN_SAME * length));
+            far = (trace < TURN_TRACE) && !going_on;
+            went_on = (trace < TURN_TRACE) && going_on;
+            if (!far && (length >= SPIN_AXIS) && (it->second.pose.sign == now.sign)) {
+                for (int c = 0; c < 3; c++) {
+                    next.spin[c] = axis[c] / length;
+                }
+            }
+        }
+        bool same = (it == seen.end()) || ((it->second.pose.sign == now.sign) && !far);
+        seen[id] = next;
         return same && (now.sign != 0);
     }
 }
@@ -384,7 +426,8 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     Pose now = pose(rdram, mtx);
     bool paired = false;
     bool turned = false;
-    bool keep = interpolated(id, now, frame, paired, turned) && !cut[camera];
+    bool went_on = false;
+    bool keep = interpolated(id, now, frame, paired, turned, went_on) && !cut[camera];
 
     // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
     // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
@@ -403,6 +446,25 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         here.origin[c] = element(rdram, mtx, 12 + c);
     }
     here.own = (now.sign != 0) && (!keep || !paired);
+    here.went_on = went_on && keep;
+    // A part turned more than 75 degrees, going on with its turn, at the place of another model's part, is drawn at
+    // its own matrix after all (the header says why), and so are the parts at its place, below.
+    for (size_t i = 0; i < placed_count; i++) {
+        Placed& other = placed[i];
+        if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || ((other.id / PARTS) == (id / PARTS)) ||
+            !same_place(other.origin, here.origin)) {
+            continue;
+        }
+        if (here.went_on && !here.own) {
+            here.own = true;
+            keep = false;
+        }
+        if (other.went_on && !other.own) {
+            other.own = true;
+            other.keep = false;
+            group(rdram, other.group, other.id, false, false);
+        }
+    }
     for (size_t i = 0; i < placed_count; i++) {
         Placed& other = placed[i];
         if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || (other.own == here.own) ||

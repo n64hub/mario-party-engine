@@ -80,6 +80,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   Original (as on the console, the default) or Fast: their names, values and wording, the same in every game, and what
   a game's hooks ask of them. Fast board movement walks from space to space in half the time, Fast map scrolling moves
   the map's view twice as fast.
+- `src/launcher_background.cpp`: a picture behind the launcher's menu, where RecompFrontend draws a plain dark
+  colour, covering the window, with the menu's text outlined so it reads on it. Each game passes its own picture.
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
@@ -88,10 +90,11 @@ Anything else the games share comes here when a change needs it in more than one
 ## How a game uses it
 
 - `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp`, `src/wipe.cpp`,
-  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width), `src/board_options.cpp` and `src/model_ids.cpp`
-  into the game,
+  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width), `src/board_options.cpp`, `src/model_ids.cpp`
+  and `src/launcher_background.cpp` into the game,
   with RT64's `include/` on its path. The game's `src/game/config.cpp` adds the board's options to its General tab
-  (`mp_board_options::add`).
+  (`mp_board_options::add`), and its `src/main/main.cpp` puts its launcher's picture, built in with file_to_c, behind
+  the menu (`mp_launcher_background::set`).
 - `patches/Makefile` compiles `lib/mario-party-engine/patches/*.c` with the game's own patches, against the game's
   decompilation's headers, its `patches/patches.h` and RT64's `include/` (the extended GBI the camera and background
   draw with).
