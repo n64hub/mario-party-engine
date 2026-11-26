@@ -71,7 +71,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   course's parts, which a minigame's course draw queues for each camera outside the models' walk (`mp_model_course`
   and `mp_model_course_end` around it), are tagged with the camera, their model and their part: untagged, Bobsled
   Run's look-alike wall bricks were paired with the other view's or a neighbour's, and the walls came apart at their
-  seams in the frames between.
+  seams in the frames between. A part's ID has the matrix it is drawn through too, numbered as the nearest of
+  the frame before: Bobsled Run draws both views' cells with one camera, each view through its own matrix.
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a

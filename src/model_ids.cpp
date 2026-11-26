@@ -27,9 +27,17 @@
 //   matrix for the whole course, the camera's. Untagged, RT64 paired those parts by its guess, and their bricks all
 //   look alike: a part was paired with one of the other camera's or its neighbour's as cells came into view, and in
 //   the frames between a wall came apart at its seams, a dark gap where it had stood. A course's part is tagged with
-//   its camera, its model (each model the draw queues numbered as it first comes) and its part. A part is drawn at
-//   one place in a course, so it is never one thing with another model's part at its place (below): a cell coming
-//   into view is new, and doesn't draw the course at its own matrix with it.
+//   its camera, the matrix it is drawn through, its model (each model the draw queues numbered as it first comes)
+//   and its part. Bobsled Run draws both views' cells with camera 0, each view through its own matrix: tagged with
+//   the camera alone, a part both views drew had one ID twice in a frame, and the second view's went untagged. A
+//   matrix (the same sixteen words, up to 7 of them a camera in a frame) is numbered as the camera's matrix of the
+//   frame before nearest it, not by the order the frame drew them in. The parts through one matrix don't share one
+//   ID: RT64 pairs an ID's uses with those of the frame before in the order they come, so where a frame drew one
+//   more part than the one before, the last part drawn went unpaired, drawn at the new frame's matrix, and past the
+//   finish line that was a whole wall, out of place in the frames between. A cell coming into view is still drawn at
+//   the new frame's matrix in the frames between, until the game's next frame. A course's part is never one thing
+//   with another model's part at its place (below): a cell coming into view doesn't draw the course at its own matrix
+//   with it.
 // - mp_model_push just before the part's gSPMatrix, with the list's next command, its place in the queue, its matrix,
 //   the frame's number and the list's start and size: the tag (a gEXEnable and the group, pushed, G_EX_PUSH) at the
 //   list's next command, which it returns after itself. RT64 reads extended commands only after a gEXEnable, and
@@ -99,6 +107,7 @@
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
 #include <cmath>
+#include <cstring>
 #include <unordered_map>
 
 #include "display_list.h"
@@ -111,10 +120,11 @@ namespace {
     constexpr int32_t QUEUE = 1024;
     // The IDs' own range, clear of G_EX_ID_IGNORE (0), G_EX_ID_AUTO (all ones) and the engine's other groups: the camera
     // at bit 26, the slot's generation at 19, the slot at 12 and the part. A course's part has bit 29 and its model's
-    // number at 12 in place of the slot's.
+    // number at 12 in place of the slot's, and its matrix's number at 22.
     constexpr uint32_t ID_BASE = 0x40000000;
     constexpr uint32_t ID_COURSE = 0x20000000;
-    constexpr uint32_t COURSE_MODELS = 1 << 14;
+    constexpr uint32_t COURSE_MODELS = 1 << 10;
+    constexpr uint32_t COURSE_NUMBER_SHIFT = 22;
     // Commands a tag takes: a gEXEnable, the group (two) and its pop.
     constexpr int32_t TAG_BYTES = 4 * 8;
     // gbi.h's G_MTX_MODELVIEW, for a group of the modelview.
@@ -130,6 +140,20 @@ namespace {
     // The camera of the course being drawn, or -1, and each model a course's draw queued, numbered.
     int32_t course_camera = -1;
     std::unordered_map<gpr, uint32_t> course_models;
+    // The matrices each camera drew a course's parts through in the frame and in the frame before (their sixteen words
+    // and elements) and each one's number in its parts' IDs, below 15 (two frames' matrices); 15 is a part's past them.
+    constexpr int32_t COURSE_MATRICES = 7;
+    constexpr uint32_t COURSE_PAST = 15;
+    struct CourseMatrix {
+        uint32_t words[16];
+        float elements[16];
+        uint32_t number;
+    };
+    CourseMatrix course_matrices[CAMERAS][COURSE_MATRICES];
+    int32_t course_matrix_count[CAMERAS];
+    CourseMatrix course_before[CAMERAS][COURSE_MATRICES];
+    int32_t course_before_count[CAMERAS];
+    int32_t course_frame = 0;
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
     bool pushed = false;
@@ -459,6 +483,76 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     uint32_t id = queued[place];
     uint32_t camera = (id >> 26) & (CAMERAS - 1);
+
+    // A course's part takes the number of the matrix it is drawn through (the header says why).
+    if (frame != course_frame) {
+        for (int c = 0; c < CAMERAS; c++) {
+            course_before_count[c] = (frame == (course_frame + 1)) ? course_matrix_count[c] : 0;
+            std::memcpy(course_before[c], course_matrices[c], sizeof(course_matrices[c]));
+            course_matrix_count[c] = 0;
+        }
+        course_frame = frame;
+    }
+    if ((id & ID_COURSE) != 0) {
+        uint32_t words[16];
+        for (int i = 0; i < 16; i++) {
+            words[i] = MEM_W(i * 4, mtx);
+        }
+        int32_t m = 0;
+        for (; m < course_matrix_count[camera]; m++) {
+            if (std::memcmp(course_matrices[camera][m].words, words, sizeof(words)) == 0) {
+                break;
+            }
+        }
+        if ((m == course_matrix_count[camera]) && (m < COURSE_MATRICES)) {
+            CourseMatrix& added = course_matrices[camera][m];
+            std::memcpy(added.words, words, sizeof(words));
+            for (int i = 0; i < 16; i++) {
+                added.elements[i] = element(rdram, mtx, i);
+            }
+            // Numbered as the nearest matrix of the frame before not taken yet, or with a number neither frame took.
+            auto taken = [&](uint32_t number) {
+                for (int32_t k = 0; k < m; k++) {
+                    if (course_matrices[camera][k].number == number) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            int32_t nearest = -1;
+            float nearest_distance = 0.0f;
+            for (int32_t k = 0; k < course_before_count[camera]; k++) {
+                const CourseMatrix& before = course_before[camera][k];
+                if (taken(before.number)) {
+                    continue;
+                }
+                float distance = 0.0f;
+                for (int i = 0; i < 16; i++) {
+                    distance += (before.elements[i] - added.elements[i]) * (before.elements[i] - added.elements[i]);
+                }
+                if (std::isfinite(distance) && ((nearest < 0) || (distance < nearest_distance))) {
+                    nearest = k;
+                    nearest_distance = distance;
+                }
+            }
+            if (nearest >= 0) {
+                added.number = course_before[camera][nearest].number;
+            }
+            else {
+                uint32_t number = 0;
+                for (bool used = true; used; number += used ? 1 : 0) {
+                    used = taken(number);
+                    for (int32_t k = 0; !used && (k < course_before_count[camera]); k++) {
+                        used = (course_before[camera][k].number == number);
+                    }
+                }
+                added.number = number;
+            }
+            course_matrix_count[camera]++;
+        }
+        uint32_t number = (m < course_matrix_count[camera]) ? course_matrices[camera][m].number : COURSE_PAST;
+        id |= number << COURSE_NUMBER_SHIFT;
+    }
     auto last = seen.find(id);
     if ((last != seen.end()) && (last->second.frame == frame)) {
         return at;
