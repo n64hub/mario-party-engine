@@ -32,9 +32,9 @@
 // queues some of its room's parts three or four times a frame. With one ID for all its copies, RT64 paired one of them
 // with the frame before and took the others for new, drawn at their own matrix in the frames between (below) while the
 // rest of the room was drawn partway: on the stairway up to Mini-Game Land 21 of the room's 117 parts were, in every
-// frame of the climb, and the brick ceiling stood out sharp against the white it fades into. So each copy of a part in
-// a walk has an ID of its own, by its order in the walk, which is the same each frame; past 8 copies a part is left
-// untagged, for RT64 to pair.
+// frame of the climb, and as it starts, frames between the game's drew the stairs' lower steps out of step with the
+// rest. So each copy of a part in a walk has an ID of its own, by its order in the walk, which is the same each frame;
+// past 8 copies a part is left untagged, for RT64 to pair.
 //
 // The part is interpolated as RT64 interpolates a matrix it pairs by itself (decomposed, each component its own
 // choice), except where its matrix collapses what it draws (a zero determinant: a game hides a part by scaling it to 0)
