@@ -574,10 +574,12 @@ extern "C" void mp_model_pop(uint8_t* rdram, gpr gfx) {
 }
 
 // WIP: a part of another model queued in a walk, every 200th frame (to be taken out).
+int32_t mp_dbg_path = 0;
+extern "C" void mp_model_dbg_path(int32_t path) { mp_dbg_path = path; }
 extern "C" void mp_model_dbg(uint8_t*, gpr model, int32_t part, gpr ra, int32_t place) {
     if ((stats_frame % 200) != 0) {
         return;
     }
-    fprintf(stderr, "[mpdbg] f%d slot%d data%08x model%08x part%d ra%08x place%d%s\n", stats_frame, walking,
-            (uint32_t)walking_data, (uint32_t)model, part, (uint32_t)ra, place, (model != walking_data) ? " FOREIGN" : "");
+    fprintf(stderr, "[mpdbg] f%d slot%d data%08x model%08x part%d ra%08x place%d path%x%s\n", stats_frame, walking,
+            (uint32_t)walking_data, (uint32_t)model, part, (uint32_t)ra, place, mp_dbg_path, (model != walking_data) ? " FOREIGN" : "");
 }
