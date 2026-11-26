@@ -38,7 +38,9 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   their items, those drawn as triangles too, the hand that carries one out and an item flown to another panel), and a
   picture as wide as the screen (a minigame's sky) stretched over the window wherever the game puts it, through hooks
   in the sprite manager, whose code is the decompilations' asm. The letters of the game's big messages (WINS! after a
-  minigame), which come in from five times their size, reach out to the window's edges rather than stop at 4:3's.
+  minigame), which come in from five times their size, reach out to the window's edges rather than stop at 4:3's, as
+  does any other sprite in the 4:3 middle that crosses its edges (Shell Game's coins), and only such a one: each drawn
+  so adds commands to the game's display list, which the game sizes for its own.
   A minigame's corner HUD (each player's name and coins in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) is
   drawn at the window's sides, as far in from its edges as from 4:3's. A bar across the screen (Bobsled Run's progress
   bar between its two views) is stretched over the window from edge to edge, its racers' icons, start and finish going
