@@ -572,3 +572,12 @@ extern "C" void mp_model_pop(uint8_t* rdram, gpr gfx) {
     mp_display_list::emit(rdram, gfx, &command, 1);
     pushed = false;
 }
+
+// WIP: a part of another model queued in a walk, every 200th frame (to be taken out).
+extern "C" void mp_model_dbg(uint8_t*, gpr model, int32_t part, gpr ra, int32_t place) {
+    if ((stats_frame % 200) != 0) {
+        return;
+    }
+    fprintf(stderr, "[mpdbg] f%d slot%d data%08x model%08x part%d ra%08x place%d%s\n", stats_frame, walking,
+            (uint32_t)walking_data, (uint32_t)model, part, (uint32_t)ra, place, (model != walking_data) ? " FOREIGN" : "");
+}
