@@ -91,6 +91,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   the map's view twice as fast.
 - `src/launcher_background.cpp`: a picture behind the launcher's menu, where RecompFrontend draws a plain dark
   colour, covering the window, with the menu's text outlined so it reads on it. Each game passes its own picture.
+- `src/crash_trace.cpp`: a crash's trace in a Linux or macOS build. A fault (SIGSEGV, SIGBUS, SIGILL, SIGFPE) or an
+  abort prints a `Crash:` line to stderr with the signal, the address and the thread, then the native stack's frames
+  (module and offset, for `addr2line` on the same build's binary), and dies of the same signal. It installs itself
+  as the program starts; a game only compiles it. Nothing happens on Windows or in a browser.
 - `tools/gen_syms.py`: writes a game's `syms/` (the symbols N64Recomp reads) from its decompilation's ELF; the game's
   `tools/gen_syms.sh` runs it.
 
@@ -99,8 +103,8 @@ Anything else the games share comes here when a change needs it in more than one
 ## How a game uses it
 
 - `CMakeLists.txt` compiles `lib/mario-party-engine/src/process_threads.cpp`, `src/hud.cpp`, `src/wipe.cpp`,
-  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width), `src/board_options.cpp`, `src/model_ids.cpp`
-  and `src/launcher_background.cpp` into the game,
+  `src/aspect_ratio.cpp` (which `src/hud.cpp` asks the picture's width), `src/board_options.cpp`, `src/model_ids.cpp`,
+  `src/launcher_background.cpp` and `src/crash_trace.cpp` into the game,
   with RT64's `include/` on its path. The game's `src/game/config.cpp` adds the board's options to its General tab
   (`mp_board_options::add`), and its `src/main/main.cpp` puts its launcher's picture, built in with file_to_c, behind
   the menu (`mp_launcher_background::set`).
