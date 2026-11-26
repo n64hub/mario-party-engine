@@ -90,9 +90,12 @@
 //   mp_hud_sprite_reach, from a game's hook just after mp_hud_sprite_start, moves a message's sprite drawn as
 //   rectangles right by as far as the window reaches past 4:3 (its x, an s16 at the address given, put back by
 //   mp_hud_sprite_end), and aligns its rectangles from the screen's centre as far back left (gEXSetRectAlign): it is
-//   drawn where it was, and cut off at the window's edge, not 4:3's. mp_hud_sprite_left and mp_hud_sprite_right,
-//   from a game's hook where the sprite manager drops a sprite wholly off the screen (its left past 320, its right
-//   before 0), say where the window's edges are in the sprite's x, moved or not, so one in the window's sides is drawn.
+//   drawn where it was, and cut off at the window's edge, not 4:3's. mp_hud_sprite_reach_float does the same for a
+//   game whose sprite's x is a float (Mario Party 2's SprDisp, whose PutSprite cuts a rectangle off at x 0 too: Game
+//   Setup's cards, sliding in from past the screen's left edge, were cut off at 4:3's). mp_hud_sprite_left and
+//   mp_hud_sprite_right, from a game's hook where the sprite manager drops a sprite wholly off the screen (its left
+//   past 320, its right before 0), say where the window's edges are in the sprite's x, moved or not, so one in the
+//   window's sides is drawn.
 //   Every other sprite in the 4:3 middle (none of a panel's, a side's or the bar's) is drawn the same way, where the
 //   game puts it and cut off at the window's edges: Shell Game's coins, poured from past the screen's top-left corner
 //   into the player, were cut off at 4:3's left edge, and those wholly past it not drawn.
@@ -215,10 +218,13 @@ namespace {
     int messages_next = 0;
     // Whether the sprite being drawn reaches past 4:3 (a message's, or one in the 4:3 middle), in a picture wider than
     // 4:3, how far the window reaches past 4:3 on each side, in the screen's pixels, and where its x is if
-    // mp_hud_sprite_reach moved it that far (0 for not).
+    // mp_hud_sprite_reach moved it that far (0 for not), and the word there before mp_hud_sprite_reach_float moved a
+    // float x (put back as it was, not less as far, which a float's rounding could leave a little off).
     bool sprite_reaching = false;
     int32_t sprite_reach = 0;
     gpr sprite_moved = 0;
+    bool sprite_moved_float = false;
+    uint32_t sprite_moved_word = 0;
     // The player whose hand the game read last, until it sets the hand's group's picture: -1 for none.
     int hand_read = -1;
     // Whether the sprite being drawn started an alignment, and how far that moves its rectangles, in the screen's pixels.
@@ -963,14 +969,13 @@ extern "C" float mp_hud_sprite_shift(uint8_t* rdram) {
     return sprite_aligned ? sprite_shift : 0.0f;
 }
 
-// mp_hud_sprite_reach(gfx, x, rects): the sprite mp_hud_sprite_start began has its x, an s16, at x, and is drawn as
-// texture rectangles (rects, not 0) or not.
-extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rects) {
-    if (!sprite_reaching || (sprite_reach == 0) || (rects == 0)) {
-        return;
-    }
-    MEM_H(0, x) = (int16_t)(MEM_H(0, x) + sprite_reach);
-    sprite_moved = x;
+// Whether mp_hud_sprite_reach moves the sprite being drawn: one reaching past 4:3, drawn as texture rectangles.
+static bool reach_moves(int32_t rects) {
+    return sprite_reaching && (sprite_reach != 0) && (rects != 0);
+}
+
+// The rectangles of a sprite moved right by sprite_reach, aligned from the window's centre as far back left.
+static void reach_align(uint8_t* rdram, gpr gfx) {
     // A rectangle drawn at x is at the window's centre plus x plus the offset: back by as far as it was moved, from
     // the screen's left edge.
     int32_t offset = -(HALF + sprite_reach) * 4;
@@ -978,6 +983,36 @@ extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rect
     gEXEnable(&commands[0]);
     gEXSetRectAlign(&commands[1], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, offset, 0, offset, 0);
     emit(rdram, gfx, commands, 3);
+}
+
+// mp_hud_sprite_reach(gfx, x, rects): the sprite mp_hud_sprite_start began has its x, an s16, at x, and is drawn as
+// texture rectangles (rects, not 0) or not.
+extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rects) {
+    if (!reach_moves(rects)) {
+        return;
+    }
+    MEM_H(0, x) = (int16_t)(MEM_H(0, x) + sprite_reach);
+    sprite_moved = x;
+    sprite_moved_float = false;
+    reach_align(rdram, gfx);
+}
+
+// mp_hud_sprite_reach_float(gfx, x, rects): mp_hud_sprite_reach for a game whose sprite has its x as a float at x.
+extern "C" void mp_hud_sprite_reach_float(uint8_t* rdram, gpr gfx, gpr x, int32_t rects) {
+    if (!reach_moves(rects)) {
+        return;
+    }
+    union {
+        uint32_t u;
+        float f;
+    } value;
+    value.u = (uint32_t)MEM_W(0, x);
+    sprite_moved_word = value.u;
+    value.f += (float)sprite_reach;
+    MEM_W(0, x) = (int32_t)value.u;
+    sprite_moved = x;
+    sprite_moved_float = true;
+    reach_align(rdram, gfx);
 }
 
 // Where the window's left and right edges are in the x of the sprite being drawn: 0 and 320 but for one reaching past 4:3.
@@ -1027,7 +1062,12 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
         int count = 0;
         gEXEnable(&commands[count++]);
         if (sprite_moved != 0) {
-            MEM_H(0, sprite_moved) = (int16_t)(MEM_H(0, sprite_moved) - sprite_reach);
+            if (sprite_moved_float) {
+                MEM_W(0, sprite_moved) = (int32_t)sprite_moved_word;
+                sprite_moved_float = false;
+            } else {
+                MEM_H(0, sprite_moved) = (int16_t)(MEM_H(0, sprite_moved) - sprite_reach);
+            }
             sprite_moved = 0;
             gEXSetRectAlign(&commands[count], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
             count += 2;
