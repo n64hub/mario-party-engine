@@ -109,6 +109,7 @@
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
 #include <cmath>
+#include <cstring>
 #include <unordered_map>
 
 #include "display_list.h"
@@ -722,4 +723,95 @@ extern "C" void mp_model_pop(uint8_t* rdram, gpr gfx) {
     gEXPopMatrixGroup(&command, MODELVIEW);
     mp_display_list::emit(rdram, gfx, &command, 1);
     pushed = false;
+}
+
+// A minigame's own effects, drawn outside the model walk, paired with their own between the game's frames the same way:
+// each of its slots (an effect the minigame keeps in a table of its own, a puff or a spark, at its slot's matrix)
+// tagged with an ID of the minigame and the slot. Untagged, RT64 paired the draws that look alike nearest first, and
+// the number drawn changes from one frame to the next: Mario Party 1's Coin Block Bash, as puffs came and went, drew
+// a small puff in the frames between stretched from a big one's matrix across the field. A slot is drawn at its own
+// matrix where it wasn't drawn the frame before (the table hands an empty slot to a new effect), or where it moved more
+// than the game's `far` from where its step of the frame before goes on to: the table hands a slot on to a new effect
+// in the frame its effect ends, too. Coin Block Bash's puffs go at most 50 of its units a frame from where their step
+// goes on to, and a slot handed on goes 70 or more (of 2,715 drawn in one play of it).
+// - mp_effect_push just before the slot's gSPMatrix, with the list's next command, the slot's key (the game's, as the
+//   minigame and the slot: under 2^24), the address of its place (three floats, the game's units), its `far` and the
+//   frame's number: the tag at the list's next command, which it returns after itself. The game's table leaves room
+//   for it in the list.
+// - mp_effect_pop after the slot's display list, with the list's next command: the tag popped, and the command after.
+
+namespace {
+    constexpr uint32_t EFFECT_ID_BASE = 0x20000000;
+    constexpr uint32_t EFFECT_KEYS = 1u << 24;
+
+    struct Effect {
+        int32_t frame = 0;
+        float origin[3] = {};
+        float step[3] = {};
+    };
+    std::unordered_map<uint32_t, Effect> effects;
+    bool effect_pushed = false;
+
+    float word_float(uint8_t* rdram, gpr at) {
+        uint32_t word = (uint32_t)MEM_W(0, at);
+        float value;
+        memcpy(&value, &word, sizeof(value));
+        return value;
+    }
+}
+
+extern "C" gpr mp_effect_push(uint8_t* rdram, gpr at, uint32_t key, gpr place, float far, int32_t frame) {
+    effect_pushed = false;
+    if (key >= EFFECT_KEYS) {
+        return at;
+    }
+    float origin[3];
+    for (int c = 0; c < 3; c++) {
+        origin[c] = word_float(rdram, place + c * 4);
+    }
+    auto found = effects.find(key);
+    bool keep = false;
+    Effect now;
+    now.frame = frame;
+    if ((found != effects.end()) && (found->second.frame == frame - 1)) {
+        const Effect& before = found->second;
+        float off = 0.0f;
+        for (int c = 0; c < 3; c++) {
+            now.step[c] = origin[c] - before.origin[c];
+            float d = now.step[c] - before.step[c];
+            off += d * d;
+        }
+        keep = off <= far * far;
+        if (!keep) {
+            for (int c = 0; c < 3; c++) {
+                now.step[c] = 0.0f;
+            }
+        }
+    }
+    for (int c = 0; c < 3; c++) {
+        now.origin[c] = origin[c];
+    }
+    effects[key] = now;
+
+    GfxCommand enable;
+    gEXEnable(&enable);
+    MEM_W(0, at) = enable.values.word0;
+    MEM_W(4, at) = enable.values.word1;
+    at += 8;
+    group(rdram, at, EFFECT_ID_BASE | key, keep, false);
+    at += 16;
+    effect_pushed = true;
+    return at;
+}
+
+extern "C" gpr mp_effect_pop(uint8_t* rdram, gpr at) {
+    if (!effect_pushed) {
+        return at;
+    }
+    GfxCommand command;
+    gEXPopMatrixGroup(&command, MODELVIEW);
+    MEM_W(0, at) = command.values.word0;
+    MEM_W(4, at) = command.values.word1;
+    effect_pushed = false;
+    return at + 8;
 }
