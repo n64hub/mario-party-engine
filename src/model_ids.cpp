@@ -20,7 +20,13 @@
 // - mp_model_queued where a part goes into the queue, with its place in the queue, its part number and its model: the
 //   part is tagged with the model that is being walked. A part queued outside a model's walk (a minigame's own) isn't,
 //   nor one of another model queued in its walk (a model held at one of its parts, or a part taken from another
-//   model), whose part number is that model's.
+//   model), whose part number is that model's. A model's hierarchy can name one part at several of its nodes, each
+//   drawn at a matrix of its own: Mario Party 1's Coin Block Bash draws the coins that burst from a block as 7 copies
+//   of one part, the coin bags as 3 and a model of its field up to 9, 5 to 19 copies a frame in all. Under one ID, a
+//   frame held several matrices for RT64 to pair with the frame before's, and a copy was drawn in the frames between
+//   partway to another copy's matrix. So each copy has an ID of its own, which holds the how-manyth it is of its part
+//   in the walk: the walk takes the model's nodes in the same order each frame. Past 32 copies, a part is left
+//   untagged.
 // - mp_model_push just before the part's gSPMatrix, with the list's next command, its place in the queue, its matrix,
 //   the frame's number and the list's start and size: the tag (a gEXEnable and the group, pushed, G_EX_PUSH) at the
 //   list's next command, which it returns after itself. RT64 reads extended commands only after a gEXEnable, and
@@ -96,12 +102,23 @@
 namespace {
     constexpr int32_t SLOTS = 128;
     constexpr int32_t CAMERAS = 8;
-    // The parts of a model told apart, and the queue's places kept.
+    // The parts of a model told apart, the copies of a part in one walk, and the queue's places kept.
     constexpr int32_t PARTS = 1 << 12;
+    constexpr int32_t COPIES = 1 << 5;
     constexpr int32_t QUEUE = 1024;
     // The IDs' own range, clear of G_EX_ID_IGNORE (0), G_EX_ID_AUTO (all ones) and the engine's other groups: the camera
-    // at bit 26, the slot's generation at 19, the slot at 12 and the part.
+    // at bit 27, the slot's generation at 24, the slot at 17, the copy at 12 and the part. A slot's generation only has
+    // to differ from the frame before's, as an ID is paired with that frame's alone. The bits from MODEL_SHIFT up tell the
+    // model apart (its camera, its slot and what the slot held).
     constexpr uint32_t ID_BASE = 0x40000000;
+    constexpr int CAMERA_SHIFT = 27;
+    constexpr int GENERATION_SHIFT = 24;
+    constexpr uint32_t GENERATIONS = 1 << 3;
+    constexpr int MODEL_SHIFT = 17;
+    constexpr int COPY_SHIFT = 12;
+    uint32_t camera_of(uint32_t id) {
+        return (id >> CAMERA_SHIFT) & (CAMERAS - 1);
+    }
     // Commands a tag takes: a gEXEnable, the group (two) and its pop.
     constexpr int32_t TAG_BYTES = 4 * 8;
     // gbi.h's G_MTX_MODELVIEW, for a group of the modelview.
@@ -114,6 +131,10 @@ namespace {
     int32_t walking = -1;
     gpr walking_data = 0;
     uint32_t walking_camera = 0;
+    // How many times each part was queued in the walk so far, kept for the walk it was last counted in.
+    uint32_t walk_number = 0;
+    uint32_t part_walk[PARTS];
+    uint8_t part_copies[PARTS];
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
     bool pushed = false;
@@ -379,6 +400,7 @@ extern "C" void mp_model_slot(uint8_t*, int32_t camera, int32_t slot, gpr data) 
     walking = slot;
     walking_data = data;
     walking_camera = (uint32_t)camera;
+    walk_number++;
 }
 
 extern "C" void mp_model_slot_end(uint8_t*) {
@@ -393,8 +415,19 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
         queued[place] = 0;
         return;
     }
-    queued[place] = ID_BASE | (walking_camera << 26) | ((slot_generation[walking] & 0x7F) << 19) |
-                    ((uint32_t)walking << 12) | (uint32_t)part;
+    if (part_walk[part] != walk_number) {
+        part_walk[part] = walk_number;
+        part_copies[part] = 0;
+    }
+    uint32_t copy = part_copies[part];
+    if (copy >= (uint32_t)COPIES) {
+        queued[place] = 0;
+        return;
+    }
+    part_copies[part]++;
+    queued[place] = ID_BASE | (walking_camera << CAMERA_SHIFT) |
+                    ((slot_generation[walking] & (GENERATIONS - 1)) << GENERATION_SHIFT) |
+                    ((uint32_t)walking << MODEL_SHIFT) | (copy << COPY_SHIFT) | (uint32_t)part;
 }
 
 // The group's two commands at the address: the part interpolated (its components AUTO, and its place INTERPOLATE where
@@ -422,7 +455,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         return at;
     }
     uint32_t id = queued[place];
-    uint32_t camera = (id >> 26) & (CAMERAS - 1);
+    uint32_t camera = camera_of(id);
     Pose now = pose(rdram, mtx);
     bool paired = false;
     bool turned = false;
@@ -451,7 +484,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     // its own matrix after all (the header says why), and so are the parts at its place, below.
     for (size_t i = 0; i < placed_count; i++) {
         Placed& other = placed[i];
-        if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || ((other.id / PARTS) == (id / PARTS)) ||
+        if ((camera_of(other.id) != camera) || ((other.id >> MODEL_SHIFT) == (id >> MODEL_SHIFT)) ||
             !same_place(other.origin, here.origin)) {
             continue;
         }
@@ -467,7 +500,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     for (size_t i = 0; i < placed_count; i++) {
         Placed& other = placed[i];
-        if ((((other.id >> 26) & (CAMERAS - 1)) != camera) || (other.own == here.own) ||
+        if ((camera_of(other.id) != camera) || (other.own == here.own) ||
             !same_place(other.origin, here.origin)) {
             continue;
         }
@@ -492,7 +525,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
             turning_camera[camera] = turning_now;
             for (size_t i = 0; i < placed_count; i++) {
                 Placed& other = placed[i];
-                if ((((other.id >> 26) & (CAMERAS - 1)) == camera) && other.keep) {
+                if ((camera_of(other.id) == camera) && other.keep) {
                     group(rdram, other.group, other.id, true, turning_now);
                 }
             }

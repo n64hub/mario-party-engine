@@ -58,7 +58,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   with an ID of its model and its part (gEXMatrixGroup), through hooks in the model walk and the draw of its queue,
   whose code is the decompilations' asm. RT64 otherwise guesses the pairs among draws that look alike, and paired a
   character's head with its neighbour's in the frames between the game's (Mario Party 3's opening, as the toy box
-  comes down). A part's ID holds the camera too, as each camera of a screen split between players draws it again. A
+  comes down). A part's ID holds the camera too, as each camera of a screen split between players draws it again, and
+  the how-manyth copy of its part it is in the model's walk, as a model can draw one part at several of its nodes
+  (Mario Party 1's Coin Block Bash, its coins, coin bags and field): under one ID, a copy was drawn in the frames
+  between partway to another copy. A
   camera that cuts to another shot, told by its view's jump (`mp_model_camera`, which a game's patch calls with the
   camera's view and projection as it sets it up), has its parts drawn at the new shot, not swept partway to it (Mario
   Party 2's opening). So is a part turned more than 75 degrees in a frame, which is the game putting it somewhere,
