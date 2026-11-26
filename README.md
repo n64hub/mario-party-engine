@@ -67,7 +67,11 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   most of a camera's parts turned in a frame, the camera turned, and every part of it is moved partway in the frames
   between, not put at its new place where it moved far after resting, as RT64 otherwise does: the camera's view is in
   each part's matrix, so as a camera turned from rest the far parts jumped and the near ones didn't (Mario Party 1's
-  Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table).
+  Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table). A
+  course's parts, which a minigame's course draw queues for each camera outside the models' walk (`mp_model_course`
+  and `mp_model_course_end` around it), are tagged with the camera, their model and their part: untagged, Bobsled
+  Run's look-alike wall bricks were paired with the other view's or a neighbour's, and the walls came apart at their
+  seams in the frames between.
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
