@@ -1082,7 +1082,14 @@ extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
-    if (dbg_on() && (dbg_width >= 64.0f) && (dbg_lines < 600) && (sprite_start != 0)) {
+    static std::vector<uint64_t> dbg_seen;
+    uint32_t dbg_wbits;
+    std::memcpy(&dbg_wbits, &dbg_width, 4);
+    uint64_t dbg_key = ((uint64_t)(uint32_t)dbg_sprite << 32) | dbg_wbits;
+    bool dbg_new = dbg_on() && (sprite_start != 0) && (dbg_lines < 4000);
+    for (uint64_t k : dbg_seen) { if (k == dbg_key) { dbg_new = false; break; } }
+    if (dbg_new) {
+        dbg_seen.push_back(dbg_key);
         dbg_lines++;
         gpr end = (gpr)(int32_t)MEM_W(0, gfx);
         char ops[200];
