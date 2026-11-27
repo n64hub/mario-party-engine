@@ -546,7 +546,7 @@ namespace {
             }
         }
         if (paired) {
-            blinked = !is_course(id) && (it->second.before_frame == frame - 2) && blink_far(it->second.origin, origin) &&
+            blinked = (it->second.before_frame == frame - 2) && blink_far(it->second.origin, origin) &&
                       same_place(it->second.before, origin);
             float axis[3];
             float trace = turn_between(it->second.pose, now, axis);
