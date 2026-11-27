@@ -65,6 +65,14 @@
 //   are loaded and drawn over those two texels, filtered as one texture. To make room, its commands drop their syncs
 //   (RT64 has no use for them) and each strip's texture image and tile settings that are the same as those already
 //   set. A sprite whose commands would still not fit in their own place is left as it was.
+//   A sprite drawn in strips at another scale than the last time it was drawn is unpaired from the frame before: its
+//   tiles take the other palette (one of colour indices aside, the one format that reads it) until its scale changes
+//   again, so RT64 pairs none of its strips with that frame's. RT64 pairs each strip by itself, a strip drawn at
+//   another scale with one whose texels at its corners are the same within a texel, and the game puts each strip's
+//   edges on whole pixels, so some of a shrinking sprite's strips were paired and others not: Mario Party 3's title
+//   logo, as it bounces after it lands, was drawn in the frames between with every other strip at its size of the
+//   game frame before and the rest at the new one, big and small at once. It is drawn where the game puts it in each
+//   game frame, as it was already in the most of them, where none of its strips paired.
 // - mp_hud_sprite_shift, from a game's hook where the function that draws a sprite reads its x for the matrix it
 //   draws a sprite through (two triangles, which RT64's rectangle alignment doesn't move: Mario Party 3's items in a
 //   panel's item select), how far to move that x: as far in the screen's pixels as the alignment moves the
@@ -121,6 +129,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 #include "display_list.h"
@@ -634,6 +643,17 @@ extern "C" void mp_hud_sprite_at(uint8_t* rdram, float x, float y) {
 namespace {
     // Where the sprite being drawn starts in the display list, from mp_hud_sprite_start, for join_strips: 0 for none.
     gpr sprite_start = 0;
+    // The sprite being drawn, from mp_hud_sprite_start, for unpair_rescaled.
+    gpr sprite_drawn = 0;
+
+    // A sprite drawn in strips, as unpair_rescaled last saw it: its first strip's steps, and the palette its tiles take.
+    struct Scaled {
+        int32_t dsdx, dtdy;
+        uint32_t palette;
+    };
+
+    // By the sprite's address.
+    std::unordered_map<gpr, Scaled> scaled;
 
     // A display list's command, its two words.
     struct Command {
@@ -714,8 +734,43 @@ namespace {
         return height;
     }
 
+    // gbi.h's G_IM_FMT_CI, the one format whose tile's palette is read.
+    constexpr uint32_t FMT_CI = 2;
+
+    // A sprite drawn in more than one strip at another scale than the last time it was drawn has every tile setting of
+    // its commands (those at start, as commands holds them) not of colour indices given the other palette, which such a
+    // texture doesn't read, and keeps it while its scale stays: see the header.
+    void unpair_rescaled(uint8_t* rdram, gpr start, std::vector<Command>& commands, const std::vector<Strip>& strips) {
+        if ((sprite_drawn == 0) || (strips.size() < 2)) {
+            return;
+        }
+        auto found = scaled.find(sprite_drawn);
+        if (found == scaled.end()) {
+            scaled[sprite_drawn] = {strips[0].dsdx, strips[0].dtdy, 0};
+            return;
+        }
+        Scaled& last = found->second;
+        if ((last.dsdx != strips[0].dsdx) || (last.dtdy != strips[0].dtdy)) {
+            last.dsdx = strips[0].dsdx;
+            last.dtdy = strips[0].dtdy;
+            last.palette ^= 1;
+        }
+        if (last.palette == 0) {
+            return;
+        }
+        for (size_t i = 0; i < commands.size(); i++) {
+            Command& c = commands[i];
+            if (((c.w0 >> 24) != 0xF5) || (((c.w0 >> 21) & 7) == FMT_CI)) {
+                continue;
+            }
+            c.w1 = (c.w1 & ~(0xFu << 20)) | (last.palette << 20);
+            MEM_W(i * 8 + 4, start) = (int32_t)c.w1;
+        }
+    }
+
     // The sprite's commands from start to *gfx with each join of its strips drawn from one texture: see the header.
     // Left as they are where no strips join, or where the commands that would replace them don't fit in their place.
+    // Before that, a sprite whose scale changed is unpaired from the frame before (unpair_rescaled).
     void join_strips(uint8_t* rdram, gpr gfx, gpr start) {
         gpr end = (int32_t)MEM_W(0, gfx);
         if ((start == 0) || (end <= start) || ((end - start) / 8 > SPRITE_COMMANDS)) {
@@ -774,6 +829,8 @@ namespace {
                     break;
             }
         }
+        unpair_rescaled(rdram, start, commands, strips);
+
         // Each strip's join with the next: one texel's height, 0 for none.
         std::vector<int32_t> joins(strips.size(), 0);
         bool any = false;
@@ -868,6 +925,7 @@ static bool reaches_past_4x3(float x, float width) {
 
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     sprite_start = (int32_t)MEM_W(0, gfx);
+    sprite_drawn = sprite;
     sprite_reach_pending = false;
     // A picture as wide as the screen: never a panel's, which is a third of it.
     float width = sprite_width;
@@ -1104,6 +1162,7 @@ extern "C" void mp_hud_picture_end(uint8_t* rdram, gpr gfx) {
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     join_strips(rdram, gfx, sprite_start);
     sprite_start = 0;
+    sprite_drawn = 0;
     sprite_reach_pending = false;
     if (sprite_bar) {
         sprite_bar = false;
