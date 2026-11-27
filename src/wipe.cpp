@@ -79,6 +79,13 @@
 // past its own edges the same way, over what its scene, its wipes and its pictures as wide as the screen draw there,
 // which are drawn as a wide picture's are.
 //
+// A scene that shows something wrong in the screen's outermost lines or columns, which a TV's overscan hid, has them
+// black too: recomp_picture_overscan, a native a game's patch calls as each scene starts (Mario Party 3's
+// patches/widescreen.c), names how many lines at the top and bottom and columns at the left and right, and
+// mp_wipe_picture_sides fills them black with the sides, over its sprites as over its 3D. Mario Party 3's Picking Panic
+// leaves the red and yellow stripe between its teams' halves on the screen's last two lines once the halves join for
+// its winners, and Awful Tower's rightmost quarter shows another picture in the screen's last two columns.
+//
 // In a 4:3 window the rectangles cover nothing past the screen. RT64 reads extended commands only after a gEXEnable in
 // the same display list, so each start sends one.
 
@@ -123,6 +130,16 @@ namespace {
     // gEXSetRectAlign of RT64's own. Two commands.
     void rect_own(GfxCommand* commands) {
         gEXSetRectAlign(commands, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
+    }
+
+    // The scene's lines and columns a TV's overscan hid that are drawn black (recomp_picture_overscan): top, bottom,
+    // left, right.
+    int32_t overscan[4] = { 0, 0, 0, 0 };
+
+    // gDPFillRectangle across the screen from line top to line bottom.
+    void fill_lines(GfxCommand* command, int32_t top, int32_t bottom) {
+        command->values.word0 = (0xF6u << 24) | ((uint32_t)(SCREEN_W * 4) << 12) | (uint32_t)(bottom * 4);
+        command->values.word1 = (uint32_t)(top * 4);
     }
 
     // Whether mp_wipe_fill_start pushed the wide scissor (a picture wider than 4:3), for mp_wipe_fill_end.
@@ -357,7 +374,7 @@ extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
     }
     int32_t half4 = (int32_t)std::lround(half * 4.0f);
 
-    GfxCommand commands[22];
+    GfxCommand commands[28];
     gEXEnable(&commands[0]);
     commands[1].values.word0 = G_RDPPIPESYNC << 24;
     commands[1].values.word1 = 0;
@@ -374,24 +391,51 @@ extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
     // From WIDE left of 4:3's left edge to the picture's: a fill rectangle reaches 3/4 of a pixel past its right edge
     // (RT64 draws it as a clear of its own area, under no scissor), taken off here. RT64 rounds an aligned rectangle's
     // edges down to the game's pixels in the window, which put this one's right edge a pixel short of the picture's: it
-    // ends a pixel on.
-    gEXSetRectAlign(&commands[10], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0, 4 - half4 - 3, 0);
+    // ends a pixel on. The columns the scene's overscan hid inside the picture's left edge go with it.
+    gEXSetRectAlign(&commands[10], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0,
+                    4 - half4 - 3 + overscan[2] * 4, 0);
     fill(&commands[12], 0, 0);
     // From the picture's right edge to WIDE right of 4:3's, its left edge a pixel on for the same reason, which put it
-    // a pixel inside the picture.
-    gEXSetRectAlign(&commands[13], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, half4 + (1 - SCREEN_W) * 4, 0,
-                    (WIDE - HALF) * 4, 0);
+    // a pixel inside the picture, and the columns the overscan hid inside it.
+    gEXSetRectAlign(&commands[13], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, half4 + (1 - SCREEN_W) * 4 - overscan[3] * 4,
+                    0, (WIDE - HALF) * 4, 0);
     fill(&commands[15], SCREEN_W, SCREEN_W);
-    rect_own(&commands[16]);
-    commands[18].values.word0 = G_RDPPIPESYNC << 24;
-    commands[18].values.word1 = 0;
-    gEXPopScissor(&commands[19]);
-    gEXPopFillColor(&commands[20]);
-    gEXPopOtherMode(&commands[21]);
-    for (const GfxCommand& command : commands) {
-        MEM_W(0, at) = command.values.word0;
-        MEM_W(4, at) = command.values.word1;
+    int count = 16;
+    // The lines the overscan hid at the top and the bottom, from WIDE left of 4:3 to WIDE right of it. The top's
+    // reaches 3/4 of a line past its last, as a fill rectangle does.
+    if (overscan[0] > 0) {
+        gEXSetRectAlign(&commands[count], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0,
+                        (WIDE - HALF) * 4, 0);
+        fill_lines(&commands[count + 2], 0, overscan[0]);
+        count += 3;
+    }
+    if (overscan[1] > 0) {
+        gEXSetRectAlign(&commands[count], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0,
+                        (WIDE - HALF) * 4, 0);
+        fill_lines(&commands[count + 2], SCREEN_H - overscan[1], SCREEN_H);
+        count += 3;
+    }
+    rect_own(&commands[count]);
+    commands[count + 2].values.word0 = G_RDPPIPESYNC << 24;
+    commands[count + 2].values.word1 = 0;
+    gEXPopScissor(&commands[count + 3]);
+    gEXPopFillColor(&commands[count + 4]);
+    gEXPopOtherMode(&commands[count + 5]);
+    count += 6;
+    for (int i = 0; i < count; i++) {
+        MEM_W(0, at) = commands[i].values.word0;
+        MEM_W(4, at) = commands[i].values.word1;
         at += 8;
     }
     return at;
+}
+
+// recomp_picture_overscan(top, bottom, left, right), a native a game's patch calls as each scene starts: the screen's
+// lines at its top and bottom and columns at its left and right that a TV's overscan hid, drawn black with a 4:3
+// picture's sides (mp_wipe_picture_sides), 0 for none, at most 16 (the console's overscan border's width).
+extern "C" void recomp_picture_overscan(uint8_t* rdram, recomp_context* ctx) {
+    const gpr args[4] = { ctx->r4, ctx->r5, ctx->r6, ctx->r7 };
+    for (int i = 0; i < 4; i++) {
+        overscan[i] = std::clamp((int32_t)args[i], 0, 16);
+    }
 }
