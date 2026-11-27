@@ -115,6 +115,8 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
 
 #include "display_list.h"
 
@@ -857,8 +859,15 @@ static bool reaches_past_4x3(float x, float width) {
     return ((x - width) < 0.0f) || ((x + width) > SCREEN_W);
 }
 
+// DEBUG (temporary): wide sprites, their words and what they draw.
+static int dbg_lines = 0;
+static float dbg_width = 0.0f;
+static gpr dbg_sprite = 0;
+static bool dbg_on() { static int on = -1; if (on < 0) on = std::getenv("MP_HUD_DEBUG") ? 1 : 0; return on == 1; }
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     sprite_start = (int32_t)MEM_W(0, gfx);
+    dbg_width = sprite_width;
+    dbg_sprite = sprite;
     sprite_reach_pending = false;
     // A picture as wide as the screen: never a panel's, which is a third of it.
     float width = sprite_width;
@@ -1073,6 +1082,22 @@ extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
+    if (dbg_on() && (dbg_width >= 64.0f) && (dbg_lines < 600) && (sprite_start != 0)) {
+        dbg_lines++;
+        gpr end = (gpr)(int32_t)MEM_W(0, gfx);
+        char ops[200];
+        int n = 0;
+        for (gpr a = sprite_start; (a < end) && (n < 180); a += 8) {
+            n += std::snprintf(ops + n, sizeof(ops) - n, "%02X", (unsigned)((uint32_t)MEM_W(0, a) >> 24));
+        }
+        ops[(n < 200) ? n : 199] = 0;
+        std::fprintf(stderr, "HUDDBG w=%.1f pic=%d bar=%d sp=%08X", dbg_width, (int)sprite_picture, (int)sprite_bar,
+                     (uint32_t)dbg_sprite);
+        for (int o = 0; o < 0x98; o += 4) {
+            std::fprintf(stderr, " %08X", (uint32_t)MEM_W(o, dbg_sprite));
+        }
+        std::fprintf(stderr, " ops=%s\n", ops);
+    }
     join_strips(rdram, gfx, sprite_start);
     sprite_start = 0;
     sprite_reach_pending = false;
