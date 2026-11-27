@@ -401,12 +401,13 @@ extern "C" gpr mp_wipe_picture_sides(uint8_t* rdram, gpr at) {
                     0, (WIDE - HALF) * 4, 0);
     fill(&commands[15], SCREEN_W, SCREEN_W);
     int count = 16;
-    // The lines the overscan hid at the top and the bottom, from WIDE left of 4:3 to WIDE right of it. The top's
-    // reaches 3/4 of a line past its last, as a fill rectangle does.
+    // The lines the overscan hid at the top and the bottom, from WIDE left of 4:3 to WIDE right of it. A fill
+    // rectangle takes in the line at its bottom edge too (a whole line more, in plays at 1280x720 and 1920x1080), so
+    // the top's ends a line short of the last line it covers; the bottom's goes past the screen.
     if (overscan[0] > 0) {
         gEXSetRectAlign(&commands[count], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (-WIDE - HALF) * 4, 0,
                         (WIDE - HALF) * 4, 0);
-        fill_lines(&commands[count + 2], 0, overscan[0]);
+        fill_lines(&commands[count + 2], 0, overscan[0] - 1);
         count += 3;
     }
     if (overscan[1] > 0) {
