@@ -98,7 +98,10 @@
 //   window's sides is drawn.
 //   Every other sprite in the 4:3 middle (none of a panel's, a side's or the bar's) is drawn the same way, where the
 //   game puts it and cut off at the window's edges: Shell Game's coins, poured from past the screen's top-left corner
-//   into the player, were cut off at 4:3's left edge, and those wholly past it not drawn.
+//   into the player, were cut off at 4:3's left edge, and those wholly past it not drawn. Only one that reaches past
+//   4:3's edges (by its x from mp_hud_sprite_at or mp_hud_sprite_reach, and its width), since each one drawn this way
+//   adds up to 15 commands to the game's display list: every one in the middle drawn so ran a board's list (4,096
+//   commands in Mario Party) past its end into the game's heap as the minigame roulette came up, and crashed it.
 // - recomp_hud_widest, from the engine's patches/board_back.c, the widest the picture is drawn. In a 4:3 picture (a
 //   board's opening scene's map is no wider than 4:3, with black at the window's sides) the panels stay where the game
 //   puts them, inside 4:3 with the scene, rather than out over the black. In a picture drawn no wider than an aspect
@@ -225,6 +228,13 @@ namespace {
     gpr sprite_moved = 0;
     bool sprite_moved_float = false;
     uint32_t sprite_moved_word = 0;
+    // A sprite in the 4:3 middle (not a message's letter) whose reach waits on its x, from mp_hud_sprite_reach, and how
+    // wide it is: it reaches only if it reaches past 4:3's edges. A sprite reaching adds up to 15 commands to the game's
+    // display list, which the game sizes for its own (Mario Party's boards 4,096 commands, 32 KB): every sprite in the
+    // middle reaching ran it past its end into the game's heap, which crashed the game as a board's minigame roulette
+    // came up in a window wider than 4:3.
+    bool sprite_reach_pending = false;
+    float sprite_reach_width = 0.0f;
     // The player whose hand the game read last, until it sets the hand's group's picture: -1 for none.
     int hand_read = -1;
     // Whether the sprite being drawn started an alignment, and how far that moves its rectangles, in the screen's pixels.
@@ -841,8 +851,15 @@ static void reach_start(uint8_t* rdram, gpr gfx) {
     emit(rdram, gfx, commands, 5);
 }
 
+// Whether a sprite at x, as wide as width, reaches past 4:3's edges: anywhere from x less its width to x plus it, so
+// whether the game draws it from its left edge or its middle.
+static bool reaches_past_4x3(float x, float width) {
+    return ((x - width) < 0.0f) || ((x + width) > SCREEN_W);
+}
+
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     sprite_start = (int32_t)MEM_W(0, gfx);
+    sprite_reach_pending = false;
     // A picture as wide as the screen: never a panel's, which is a third of it.
     float width = sprite_width;
     sprite_width = 0.0f;
@@ -934,9 +951,20 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     if (!sprite_aligned) {
         // Any other sprite in the 4:3 middle (none of a panel's, a side's or the bar's) is drawn where it is, as a
         // message's letter is, and cut off at the window's edges rather than 4:3's: the coins Shell Game's start pours
-        // in from the screen's top-left corner, past its left edge, into the player.
+        // in from the screen's top-left corner, past its left edge, into the player. Only one that reaches past 4:3's
+        // edges: one inside them is drawn the same either way. Where it is: from mp_hud_sprite_at, or the x
+        // mp_hud_sprite_reach is given (a game whose hook doesn't say how wide has every one reach).
         if (!picture_4x3 && (panel < 0) && (with_bar == OnBar::Off)) {
-            reach_start(rdram, gfx);
+            if (width <= 0.0f) {
+                reach_start(rdram, gfx);
+            } else if (at) {
+                if (reaches_past_4x3(sprite_x, width)) {
+                    reach_start(rdram, gfx);
+                }
+            } else {
+                sprite_reach_pending = true;
+                sprite_reach_width = width;
+            }
         }
         return;
     }
@@ -974,6 +1002,20 @@ static bool reach_moves(int32_t rects) {
     return sprite_reaching && (sprite_reach != 0) && (rects != 0);
 }
 
+// A sprite whose reach waited on its x (x, in the screen's pixels): it reaches if it reaches past 4:3's edges, or isn't
+// drawn as rectangles (turned or flipped: wider than its width, maybe). Whether the sprite being drawn reaches.
+static bool reach_resolve(uint8_t* rdram, gpr gfx, float x, int32_t rects) {
+    if (!sprite_reach_pending) {
+        return sprite_reaching;
+    }
+    sprite_reach_pending = false;
+    if ((rects != 0) && !reaches_past_4x3(x, sprite_reach_width)) {
+        return false;
+    }
+    reach_start(rdram, gfx);
+    return true;
+}
+
 // The rectangles of a sprite moved right by sprite_reach, aligned from the window's centre as far back left.
 static void reach_align(uint8_t* rdram, gpr gfx) {
     // A rectangle drawn at x is at the window's centre plus x plus the offset: back by as far as it was moved, from
@@ -988,7 +1030,7 @@ static void reach_align(uint8_t* rdram, gpr gfx) {
 // mp_hud_sprite_reach(gfx, x, rects): the sprite mp_hud_sprite_start began has its x, an s16, at x, and is drawn as
 // texture rectangles (rects, not 0) or not.
 extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rects) {
-    if (!reach_moves(rects)) {
+    if (!reach_resolve(rdram, gfx, (float)(int16_t)MEM_H(0, x), rects) || !reach_moves(rects)) {
         return;
     }
     MEM_H(0, x) = (int16_t)(MEM_H(0, x) + sprite_reach);
@@ -999,14 +1041,14 @@ extern "C" void mp_hud_sprite_reach(uint8_t* rdram, gpr gfx, gpr x, int32_t rect
 
 // mp_hud_sprite_reach_float(gfx, x, rects): mp_hud_sprite_reach for a game whose sprite has its x as a float at x.
 extern "C" void mp_hud_sprite_reach_float(uint8_t* rdram, gpr gfx, gpr x, int32_t rects) {
-    if (!reach_moves(rects)) {
-        return;
-    }
     union {
         uint32_t u;
         float f;
     } value;
     value.u = (uint32_t)MEM_W(0, x);
+    if (!reach_resolve(rdram, gfx, value.f, rects) || !reach_moves(rects)) {
+        return;
+    }
     sprite_moved_word = value.u;
     value.f += (float)sprite_reach;
     MEM_W(0, x) = (int32_t)value.u;
@@ -1033,6 +1075,7 @@ extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     join_strips(rdram, gfx, sprite_start);
     sprite_start = 0;
+    sprite_reach_pending = false;
     if (sprite_bar) {
         sprite_bar = false;
         if (bar_moved != 0) {
