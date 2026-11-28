@@ -39,7 +39,8 @@
 //   list's next command, which it returns after itself. RT64 reads extended commands only after a gEXEnable, and
 //   forgets it at each gDPFullSync, which the draw sends between its layers when it splits them into tasks of their
 //   own, so each tag sends one. mp_model_pop after the part's display list, with the list's next-command pointer: the
-//   tag popped. Nothing for an untagged part (but at a cut, below), or near the end of the list (below).
+//   tag popped. An untagged part gets a group of its camera and model (below), or nothing where its camera isn't
+//   known, and nothing is pushed near the end of the list (below).
 // - mp_model_again just before a gSPMatrix that draws a part again at its matrix of the queue, after it was drawn there
 //   (pushed) in the frame, with what mp_model_push has: its draw again tagged as that part, in an ID of its own (the part's
 //   with the top bit set) that is interpolated as the part is, and rewritten with the part's. mp_model_again_pop after
@@ -102,7 +103,14 @@
 // Mario Party 2's Filet Relay hands the fish on with a cut to the next penguin's camera, and the frame between drew
 // the course swept from one shot to the other in that player's view. On the same run, the three handoffs' frames
 // between scored 2.67, 0.46 and 1.50 for how unlike both their neighbours they were, and 0.37, 0.24 and 0.21 after.
-//
+// Where its camera didn't cut, such a part (or a part past its 32 copies) is drawn in a group of its camera and its
+// model, an ID with RT64's own order (G_EX_ORDER_AUTO), which RT64 pairs as it pairs untagged draws (those alike, the
+// nearest first) but among that group's draws alone. Left with no group, RT64 paired untagged draws across cameras:
+// Mario Party 2's Handcar Havoc draws one course in each half of the screen, its segments (one model's parts, all at
+// their camera's view) queued outside a model's walk, 13 to 18 of them a camera, and the same segment's mesh in both
+// halves drew alike. A segment of one half paired with the other's was drawn between the two views, and the frame
+// between showed a wall across the track, or the track gone below a line (n64hub/mario-party-2-recomp#113). Its
+// camera's segments all share one matrix, so a pairing among them is right whichever segment it takes.
 // And where a camera turned, every part of it has its place interpolated outright. RT64 otherwise chooses
 // (G_EX_COMPONENT_AUTO), and puts a part at its new place, not partway, where it moved 5 units or more in a frame and
 // 10 times as far as in the frame before: it takes that for the game putting it somewhere else. A part's matrix holds
@@ -158,6 +166,11 @@ namespace {
     constexpr uint32_t COPY_BITS = (uint32_t)(COPIES - 1) << COPY_SHIFT;
     // A part's draw again (mp_model_again) has its own ID with the top bit set, clear of the IDs below it.
     constexpr uint32_t AGAIN_ID = 0x80000000u;
+    // An untagged part's group (the header says why): bit 28, its camera at bit 24 and its model's address (the low 24
+    // bits, the same for its whole model), clear of the IDs above and the effects' (0x20000000 up).
+    constexpr uint32_t UNTAGGED_ID_BASE = 0x10000000;
+    constexpr int UNTAGGED_CAMERA_SHIFT = 24;
+    constexpr uint32_t UNTAGGED_MODELS = (1u << 24) - 1;
     uint32_t camera_of(uint32_t id) {
         return (id >> CAMERA_SHIFT) & (CAMERAS - 1);
     }
@@ -179,6 +192,8 @@ namespace {
     uint8_t part_copies[PARTS];
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
+    // Each place's model, as mp_model_queued gives it, which an untagged part's group is told by.
+    gpr queued_model[QUEUE];
     bool pushed = false;
     bool again_pushed = false;
     // Where the part being drawn starts in the list (mp_model_push's `at`), for boo_writes_depth.
@@ -603,6 +618,7 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
     if ((place < 0) || (place >= QUEUE)) {
         return;
     }
+    queued_model[place] = model;
     if ((walking < 0) || (model != walking_data) || (part < 0) || (part >= PARTS)) {
         queued[place] = 0;
         return;
@@ -659,15 +675,25 @@ static void regroup(uint8_t* rdram, Placed& p, bool keep, bool turned) {
     }
 }
 
-// An untagged part: nothing, unless its camera cut, where it is drawn at its own matrix in a group of no ID (the
-// header says why), as the tag's gEXEnable and group, which mp_model_pop pops.
-static gpr untagged(uint8_t* rdram, gpr at, int32_t camera) {
-    if ((camera < 0) || (camera >= CAMERAS) || !cut[camera]) {
+// An untagged part of a known camera: drawn at its own matrix in a group of no ID where its camera cut, and otherwise
+// in its camera's and model's group, paired by RT64 among that group's draws alone (the header says why), as the tag's
+// gEXEnable and group, which mp_model_pop pops. Nothing where its camera isn't known, or neither cut nor model is.
+static gpr untagged(uint8_t* rdram, gpr at, int32_t camera, gpr model) {
+    if ((camera < 0) || (camera >= CAMERAS) || (!cut[camera] && (model == 0))) {
         return at;
     }
     GfxCommand commands[3];
     gEXEnable(&commands[0]);
-    gEXMatrixGroupNoInterpolate(&commands[1], G_EX_PUSH, MODELVIEW, G_EX_EDIT_NONE);
+    if (cut[camera]) {
+        gEXMatrixGroupNoInterpolate(&commands[1], G_EX_PUSH, MODELVIEW, G_EX_EDIT_NONE);
+    }
+    else {
+        uint32_t id = UNTAGGED_ID_BASE | ((uint32_t)camera << UNTAGGED_CAMERA_SHIFT) | ((uint32_t)model & UNTAGGED_MODELS);
+        gEXMatrixGroup(&commands[1], id, G_EX_INTERPOLATE_DECOMPOSE, G_EX_PUSH, MODELVIEW, G_EX_COMPONENT_AUTO,
+                       G_EX_COMPONENT_AUTO, G_EX_COMPONENT_AUTO, G_EX_COMPONENT_AUTO, G_EX_COMPONENT_AUTO,
+                       G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO, G_EX_ORDER_AUTO, G_EX_EDIT_NONE, G_EX_ASPECT_AUTO,
+                       G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
+    }
     for (int i = 0; i < 3; i++) {
         MEM_W(i * 8, at) = commands[i].values.word0;
         MEM_W(i * 8 + 4, at) = commands[i].values.word1;
@@ -687,7 +713,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         return at;
     }
     if (queued[place] == 0) {
-        return untagged(rdram, at, drawing_camera);
+        return untagged(rdram, at, drawing_camera, queued_model[place]);
     }
     Pose now = pose(rdram, mtx);
     float origin[3];
@@ -696,7 +722,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     int32_t copy = copy_number(queued[place], origin, frame);
     if (copy < 0) {
-        return untagged(rdram, at, (int32_t)camera_of(queued[place]));
+        return untagged(rdram, at, (int32_t)camera_of(queued[place]), queued_model[place]);
     }
     uint32_t id = queued[place] | ((uint32_t)copy << COPY_SHIFT);
     uint32_t camera = camera_of(id);
