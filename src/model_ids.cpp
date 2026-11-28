@@ -40,6 +40,14 @@
 //   forgets it at each gDPFullSync, which the draw sends between its layers when it splits them into tasks of their
 //   own, so each tag sends one. mp_model_pop after the part's display list, with the list's next-command pointer: the
 //   tag popped. Nothing for an untagged part, or near the end of the list (below).
+// - mp_model_again just before a gSPMatrix that draws a part again at its matrix of the queue, after it was drawn there
+//   (pushed) in the frame, with what mp_model_push has: its draw again tagged as that part, in an ID of its own (the part's
+//   with the top bit set) that is interpolated as the part is, and rewritten with the part's. mp_model_again_pop after
+//   that draw's display list, with the list's next command: the tag popped, and the command after. Mario Party 1's
+//   Crane Game draws the claw's shadow on what lies under it as each of those parts again, a decal (drawn only where it
+//   lies on what was drawn there, at its depth), with the shadow's texture on it. Untagged, RT64 paired those draws by
+//   itself, and a frame between drew a part's shadow at another matrix than the part's, off it, so the decal drew
+//   nothing there: the shadow on a character under the claw was gone for a frame now and then.
 //
 // The part is interpolated as RT64 interpolates a matrix it pairs by itself (decomposed, each component its own
 // choice), except where its matrix collapses what it draws (a zero determinant: a game hides a part by scaling it to 0)
@@ -131,6 +139,9 @@ namespace {
     constexpr uint32_t GENERATIONS = 1 << 3;
     constexpr int MODEL_SHIFT = 17;
     constexpr int COPY_SHIFT = 12;
+    constexpr uint32_t COPY_BITS = (uint32_t)(COPIES - 1) << COPY_SHIFT;
+    // A part's draw again (mp_model_again) has its own ID with the top bit set, clear of the IDs below it.
+    constexpr uint32_t AGAIN_ID = 0x80000000u;
     uint32_t camera_of(uint32_t id) {
         return (id >> CAMERA_SHIFT) & (CAMERAS - 1);
     }
@@ -153,6 +164,7 @@ namespace {
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
     bool pushed = false;
+    bool again_pushed = false;
 
     // A part's matrix's axes (its first three rows, each made 1 long, or 0) and its determinant's sign (0 where it
     // collapses what it draws).
@@ -214,6 +226,8 @@ namespace {
 
     // The frame's tags so far: where each part's origin is in its camera's view, where its group command is in the
     // list, whether it is drawn at its own matrix, and whether it turned more than 75 degrees, going on with its turn.
+    // And where the group commands of the part's draws again (mp_model_again) are, which follow its own.
+    constexpr int32_t AGAINS = 4;
     struct Placed {
         uint32_t id;
         float origin[3];
@@ -221,6 +235,8 @@ namespace {
         bool own;
         bool keep;
         bool went_on;
+        uint8_t agains;
+        gpr again[AGAINS];
     };
     constexpr size_t PLACED = 512;
     Placed placed[PLACED];
@@ -604,6 +620,14 @@ static void group(uint8_t* rdram, gpr at, uint32_t id, bool keep, bool turned) {
     }
 }
 
+// A part's group (above) written again, and those of its draws again with it.
+static void regroup(uint8_t* rdram, Placed& p, bool keep, bool turned) {
+    group(rdram, p.group, p.id, keep, turned);
+    for (int i = 0; i < p.agains; i++) {
+        group(rdram, p.again[i], p.id | AGAIN_ID, keep, turned);
+    }
+}
+
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                               int32_t list_bytes) {
     pushed = false;
@@ -645,6 +669,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     for (int c = 0; c < 3; c++) {
         here.origin[c] = origin[c];
     }
+    here.agains = 0;
     here.own = (now.sign != 0) && (!keep || !paired);
     here.went_on = went_on && keep;
     // A part turned more than 75 degrees, going on with its turn, at the place of another model's part, is drawn at
@@ -662,7 +687,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         if (other.went_on && !other.own) {
             other.own = true;
             other.keep = false;
-            group(rdram, other.group, other.id, false, false);
+            regroup(rdram, other, false, false);
         }
     }
     for (size_t i = 0; i < placed_count; i++) {
@@ -674,7 +699,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         if (here.own) {
             other.own = true;
             other.keep = false;
-            group(rdram, other.group, other.id, false, false);
+            regroup(rdram, other, false, false);
         }
         else {
             here.own = true;
@@ -693,7 +718,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
             for (size_t i = 0; i < placed_count; i++) {
                 Placed& other = placed[i];
                 if ((camera_of(other.id) == camera) && other.keep) {
-                    group(rdram, other.group, other.id, true, turning_now);
+                    regroup(rdram, other, true, turning_now);
                 }
             }
         }
@@ -723,6 +748,55 @@ extern "C" void mp_model_pop(uint8_t* rdram, gpr gfx) {
     gEXPopMatrixGroup(&command, MODELVIEW);
     mp_display_list::emit(rdram, gfx, &command, 1);
     pushed = false;
+}
+
+extern "C" gpr mp_model_again(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
+                               int32_t list_bytes) {
+    again_pushed = false;
+    if ((place < 0) || (place >= QUEUE) || (queued[place] == 0) || (frame != placed_frame)) {
+        return at;
+    }
+    if ((at < list) || (((int32_t)(list + list_bytes - at) - TAG_BYTES) < (list_bytes / 4))) {
+        return at;
+    }
+    float origin[3];
+    for (int c = 0; c < 3; c++) {
+        origin[c] = element(rdram, mtx, 12 + c);
+    }
+    for (size_t i = 0; i < placed_count; i++) {
+        Placed& p = placed[i];
+        if (((p.id & ~COPY_BITS) != queued[place]) || (p.origin[0] != origin[0]) || (p.origin[1] != origin[1]) ||
+            (p.origin[2] != origin[2])) {
+            continue;
+        }
+        uint32_t id = p.id | AGAIN_ID;
+        if ((p.agains >= AGAINS) || (id == G_EX_ID_AUTO)) {
+            return at;
+        }
+        GfxCommand enable;
+        gEXEnable(&enable);
+        MEM_W(0, at) = enable.values.word0;
+        MEM_W(4, at) = enable.values.word1;
+        at += 8;
+        p.again[p.agains++] = at;
+        group(rdram, at, id, p.keep, turning_camera[camera_of(p.id)]);
+        at += 16;
+        again_pushed = true;
+        return at;
+    }
+    return at;
+}
+
+extern "C" gpr mp_model_again_pop(uint8_t* rdram, gpr at) {
+    if (!again_pushed) {
+        return at;
+    }
+    GfxCommand command;
+    gEXPopMatrixGroup(&command, MODELVIEW);
+    MEM_W(0, at) = command.values.word0;
+    MEM_W(4, at) = command.values.word1;
+    again_pushed = false;
+    return at + 8;
 }
 
 // A minigame's own effects, drawn outside the model walk, paired with their own between the game's frames the same way:
