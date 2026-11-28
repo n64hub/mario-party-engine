@@ -339,15 +339,23 @@ static f32 split_times(void) {
     return times;
 }
 
-// An edge of a split screen's piece from the window's centre, as gEXSetScissor takes it (in pixels of a 4:3 picture
-// of the window's height): as far from the screen's middle as across the console's screen, times how much wider than
-// 4:3 the pieces are drawn.
-static s32 split_edge(s32 x, f32 times) {
-    return (s32)((right_edge(x) - SCREEN_W / 2) * times);
+// An edge of a split screen's piece as gEXSetScissor takes it, its origin and its x from there (in pixels of a 4:3
+// picture of the window's height): from the window's centre, as far from the screen's middle as across the console's
+// screen, times how much wider than 4:3 the pieces are drawn; or, at the screen's side while they are as wide as the
+// window, the window's edge itself, which a rounded x from its centre stopped a few of its pixels short of.
+static s32 split_edge(s32 x, f32 times, u16* origin) {
+    x = right_edge(x);
+    if ((times >= mp_aspect_ratio() / WIDEST_4X3) && ((x == 0) || (x == SCREEN_W))) {
+        *origin = (x == 0) ? G_EX_ORIGIN_LEFT : G_EX_ORIGIN_RIGHT;
+        return 0;
+    }
+    *origin = G_EX_ORIGIN_CENTER;
+    return (s32)((x - SCREEN_W / 2) * times);
 }
 
 void camera_view_split_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     f32 times;
+    u16 left_origin, right_origin;
     s32 left_x, right_x;
 
     if (!camera_view_split(left, right)) {
@@ -355,12 +363,12 @@ void camera_view_split_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bott
         return;
     }
     times = split_times();
-    left_x = split_edge(left, times);
-    right_x = split_edge(right, times);
+    left_x = split_edge(left, times, &left_origin);
+    right_x = split_edge(right, times, &right_origin);
     spanning = FALSE;
     split_whole(gfx);
-    gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, left_x, top, right_x, bottom);
-    keep_wipe(left, top, right, bottom, G_EX_ORIGIN_CENTER, left_x, G_EX_ORIGIN_CENTER, right_x, top, bottom);
+    gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, left_x, top, right_x, bottom);
+    keep_wipe(left, top, right, bottom, left_origin, left_x, right_origin, right_x, top, bottom);
 }
 
 void camera_view_span(Gfx** gfx) {
