@@ -64,9 +64,11 @@
 //   magnified one at the window's resolution, filtered: each strip's last row was filtered with only itself, so a
 //   hard line ran across the picture at each join (Mario Party's sky behind a minigame's rules, 160 by 120 drawn at
 //   twice its size, 12 rows at a time: a line every 24 of the screen's 240). Where a strip goes on from the one above
-//   it (the next rows of the same texture, as wide and as magnified, a whole number of quarter pixels a texel), the
-//   one above stops a texel short, the next starts a texel later, and between them the two rows each side of the join
-//   are loaded and drawn over those two texels, filtered as one texture. To make room, its commands drop their syncs
+//   it (the next rows of the same texture, as wide and as magnified), the one above stops a texel short, the next
+//   starts a texel later, and between them the two rows each side of the join are loaded and drawn over those two
+//   texels, filtered as one texture. A texel drawn a height not whole quarter pixels (Cast Aways' sky, 13/6 times
+//   as tall: 26 lines a strip, lines at 26 and 52 over its clouds) is taken as the nearest whole number of them,
+//   its texture coordinates moved as far, to within 1/32 of a texel. To make room, its commands drop their syncs
 //   (RT64 has no use for them) and each strip's texture image and tile settings that are the same as those already
 //   set. A sprite whose commands would still not fit in their own place is left as it was.
 //   A sprite drawn in strips at another scale than the last time it was drawn is unpaired from the frame before: its
@@ -132,6 +134,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -763,24 +766,31 @@ namespace {
     }
 
     // Where strip b goes on from strip a (the next rows of the same texture, drawn right under it as wide and as
-    // magnified, a whole number of quarter pixels a texel), how tall one texel is drawn, in quarter pixels: 0 where
-    // it doesn't.
+    // magnified), how tall one texel is drawn, in whole quarter pixels, the nearest: 0 where it doesn't. A texel's
+    // height needn't be whole quarter pixels (Mario Party's Cast Aways draws its sky 13/6 times as tall, 8.67 of them):
+    // b goes on from a where a's step, which the game rounds to an s5.10, takes it to b's first row within as far as
+    // that rounding can over a's height.
     int32_t join_height(const Strip& a, const Strip& b) {
         if ((a.tile != b.tile) || (a.xl != b.xl) || (a.xh != b.xh) || (a.yh != b.yl) || (a.s != b.s) ||
-            (a.dsdx != b.dsdx) || (a.dtdy != b.dtdy) || (a.dtdy <= 0) || (a.dtdy >= STEP_ONE) ||
-            ((4 * STEP_ONE) % a.dtdy != 0)) {
+            (a.dsdx != b.dsdx) || (a.dtdy != b.dtdy) || (a.dtdy <= 0) || (a.dtdy >= STEP_ONE)) {
             return 0;
         }
-        int32_t height = (4 * STEP_ONE) / a.dtdy;
+        int32_t height = (4 * STEP_ONE + a.dtdy / 2) / a.dtdy;
         // How far a's texture coordinate goes down it, in s5.10 by quarter pixels: in s10.5, 128 times less.
         int32_t drawn = (a.yh - a.yl) * a.dtdy;
-        if (((a.yh - a.yl) <= 2 * height) || ((b.yh - b.yl) <= 2 * height) || (drawn % 128 != 0) ||
-            (a.t + drawn / 128 != b.t) || !same(a.image, b.image) || !same(a.load_tile, b.load_tile) ||
-            !same(a.own_tile, b.own_tile) || (columns(a.load) != columns(b.load)) || !whole_rows(a) ||
-            !whole_rows(b) || (last_row(a.load) + 1 != first_row(b.load))) {
+        if (((a.yh - a.yl) <= 2 * height) || ((b.yh - b.yl) <= 2 * height) ||
+            (std::abs(a.t * 128 + drawn - b.t * 128) > (a.yh - a.yl)) || !same(a.image, b.image) ||
+            !same(a.load_tile, b.load_tile) || !same(a.own_tile, b.own_tile) || (columns(a.load) != columns(b.load)) ||
+            !whole_rows(a) || !whole_rows(b) || (last_row(a.load) + 1 != first_row(b.load))) {
             return 0;
         }
         return height;
+    }
+
+    // How far a strip's texture coordinate goes in height quarter pixels at its step dtdy, in s10.5, the nearest: one
+    // texel (TEXEL) where height is one texel's exactly.
+    int32_t texels_down(int32_t height, int32_t dtdy) {
+        return (height * dtdy + 64) / 128;
     }
 
     // gbi.h's G_IM_FMT_CI, the one format whose tile's palette is read.
@@ -929,7 +939,7 @@ namespace {
             int32_t below = joins[next];
             const Command& coords = commands[i + 1];
             out.push_back({(c.w0 & ~0xFFFu) | (uint32_t)(strip.yh - below), (c.w1 & ~0xFFFu) | (uint32_t)(strip.yl + above)});
-            out.push_back({coords.w0, (coords.w1 & 0xFFFF0000u) | (uint16_t)(strip.t + ((above != 0) ? TEXEL : 0))});
+            out.push_back({coords.w0, (coords.w1 & 0xFFFF0000u) | (uint16_t)(strip.t + texels_down(above, strip.dtdy))});
             out.push_back(commands[i + 2]);
             if (below != 0) {
                 const Strip& under = strips[next + 1];
@@ -937,7 +947,7 @@ namespace {
                 out.push_back(with_rows(strip.load, row - 2, row + 1));
                 out.push_back(with_rows(strip.size, row - 2, row + 1));
                 out.push_back({(c.w0 & ~0xFFFu) | (uint32_t)(under.yl + below), (c.w1 & ~0xFFFu) | (uint32_t)(under.yl - below)});
-                out.push_back({coords.w0, (coords.w1 & 0xFFFF0000u) | (uint16_t)(under.t - TEXEL)});
+                out.push_back({coords.w0, (coords.w1 & 0xFFFF0000u) | (uint16_t)(under.t - texels_down(below, strip.dtdy))});
                 out.push_back(commands[i + 2]);
             }
             i += 2;
