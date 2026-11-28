@@ -132,6 +132,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -877,6 +879,20 @@ namespace {
                     }
                     break;
             }
+        }
+        // WIP debug (to be removed): every scaled sprite's strips.
+        static const bool strip_log = getenv("MP_HUD_STRIP_LOG") != nullptr;
+        static uint32_t strip_calls = 0;
+        strip_calls++;
+        if (strip_log && (strips.empty() || (strips[0].dsdx != STEP_ONE) || (strips[0].dtdy != STEP_ONE))) {
+            auto found = scaled.find(sprite_drawn);
+            fprintf(stderr, "strips #%u sprite %08X n=%zu cmds=%d pal=%d:", strip_calls, (uint32_t)sprite_drawn,
+                    strips.size(), count, (found == scaled.end()) ? -1 : (int)found->second.palette);
+            for (const Strip& s : strips) {
+                fprintf(stderr, " [%d,%d-%d,%d t%d s%d %d/%d tile%d]", s.xl, s.yl, s.xh, s.yh, s.t, s.s, s.dsdx, s.dtdy,
+                        s.tile);
+            }
+            fprintf(stderr, "\n");
         }
         unpair_rescaled(rdram, start, commands, strips);
 
