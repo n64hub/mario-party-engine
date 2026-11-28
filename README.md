@@ -45,9 +45,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   drawn at the window's sides, as far in from its edges as from 4:3's. A bar across the screen (Bobsled Run's progress
   bar between its two views) is stretched over the window from edge to edge, its racers' icons, start and finish going
   across it with it.
-  A sprite drawn magnified a few rows at a time (the sky behind a minigame's rules) is filtered across each join of its
-  strips, with no hard line along it. One drawn in strips that grows or shrinks (Mario Party 3's title logo as it
-  bounces) is drawn whole at each game frame's size in the frames between, not half at the size before.
+  A sprite drawn magnified a few rows at a time (the sky behind a minigame's rules, Cast Aways' sky at 13/6 times its
+  height) is filtered across each join of its strips, with no hard line along it. One drawn in strips that grows or
+  shrinks (Mario Party 3's title logo as it bounces) is drawn whole at each game frame's size in the frames
+  between, not half at the size before.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. A shape
   wipe's shape (a star, a circle) is made as many times larger as the picture is wider than 4:3, so it sweeps past the
