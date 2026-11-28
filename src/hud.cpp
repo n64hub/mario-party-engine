@@ -39,6 +39,8 @@
 //   sprites (the decompilation's esprite, each a group of the sprite manager) and how many: each is drawn from the
 //   window's edge on the side its x is on, as far in from it as it is from 4:3's, as a panel at its corner. The game
 //   puts them at hardcoded 4:3 places, so in a wider window they sat in its middle, the right ones over the scene.
+//   mp_hud_side_group does the same for one sprite group a minigame made itself, with the x it put it at (Mario
+//   Party 3's Rockin' Raceway, each player's portrait and carrots).
 // - mp_hud_bar where a minigame has made a bar across the screen of basic sprites, with where it keeps the indexes of
 //   one of each of its pieces' pictures and the rows of the screen over it: every sprite drawn from those pictures is
 //   stretched over the window (gEXSetRectAspect G_EX_ASPECT_STRETCH), and every other sprite drawn with its y on those
@@ -537,6 +539,24 @@ extern "C" void mp_hud_message_group(uint8_t* rdram, gpr group, int32_t members)
     messages_next = (messages_next + 1) % MESSAGES;
 }
 
+// The group drawn at the side of the window x (where the game has put it) is on, left or right of the screen's centre.
+namespace {
+    void side_set(gpr group, int32_t x) {
+        Side* slot = nullptr;
+        for (Side& known : sides) {
+            if (known.group == group) {
+                slot = &known;
+            }
+        }
+        if (slot == nullptr) {
+            slot = &sides[sides_next];
+            sides_next = (sides_next + 1) % SIDES;
+        }
+        slot->group = group;
+        slot->side = (x < HALF) ? -1 : 1;
+    }
+}
+
 // mp_hud_side_sprites(ids, count, basic, groups, members): count of the game's basic sprites, their indexes s16s at
 // ids, in its basic sprites at basic (laid out as BASIC_SIZE says), each a group in the sprite manager's table of
 // groups' addresses at groups, its members' addresses at members bytes into it. Each is drawn at the side of the
@@ -555,21 +575,20 @@ extern "C" void mp_hud_side_sprites(uint8_t* rdram, gpr ids, int32_t count, gpr 
             continue;
         }
         gpr group = (gpr)(int32_t)MEM_W(index * 4, groups);
-        if (group == 0) {
-            continue;
+        if (group != 0) {
+            side_set(group, x);
         }
-        Side* slot = nullptr;
-        for (Side& known : sides) {
-            if (known.group == group) {
-                slot = &known;
-            }
-        }
-        if (slot == nullptr) {
-            slot = &sides[sides_next];
-            sides_next = (sides_next + 1) % SIDES;
-        }
-        slot->group = group;
-        slot->side = (x < HALF) ? -1 : 1;
+    }
+}
+
+// mp_hud_side_group(group, members, x): the group at group, its members' addresses at members bytes into it, is a
+// minigame's corner HUD the game made as a sprite group of its own rather than of basic sprites (Mario Party 3's
+// Rockin' Raceway, a player's portrait and carrots), put at x on the screen: it is drawn at the side of the window x
+// is on, as mp_hud_side_sprites draws one.
+extern "C" void mp_hud_side_group(uint8_t* rdram, gpr group, int32_t members, int32_t x) {
+    side_members = members;
+    if (group != 0) {
+        side_set(group, x);
     }
 }
 
