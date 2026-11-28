@@ -66,9 +66,11 @@
 //   twice its size, 12 rows at a time: a line every 24 of the screen's 240). Where a strip goes on from the one above
 //   it (the next rows of the same texture, as wide and as magnified), the one above stops a texel short, the next
 //   starts a texel later, and between them the two rows each side of the join are loaded and drawn over those two
-//   texels, filtered as one texture. A texel drawn a height not whole quarter pixels (Cast Aways' sky, 13/6 times
-//   as tall: 26 lines a strip, lines at 26 and 52 over its clouds) is taken as the nearest whole number of them,
-//   its texture coordinates moved as far, to within 1/32 of a texel. To make room, its commands drop their syncs
+//   texels, filtered as one texture. A texel drawn a height not whole lines (Cast Aways' sky, 13/6 times as tall:
+//   26 lines a strip, lines at 26 and 52 over its clouds) is taken as the nearest whole number of lines, its texture
+//   coordinates moved as far, to within 1/32 of a texel: a texture rectangle covers whole lines, and its texture
+//   coordinates start at the line its top is in, so a join edged part way down a line drew its rows a line ahead and
+//   past the last one it loaded, with a step at each of its edges. To make room, its commands drop their syncs
 //   (RT64 has no use for them) and each strip's texture image and tile settings that are the same as those already
 //   set. A sprite whose commands would still not fit in their own place is left as it was.
 //   A sprite drawn in strips at another scale than the last time it was drawn is unpaired from the frame before: its
@@ -766,8 +768,9 @@ namespace {
     }
 
     // Where strip b goes on from strip a (the next rows of the same texture, drawn right under it as wide and as
-    // magnified), how tall one texel is drawn, in whole quarter pixels, the nearest: 0 where it doesn't. A texel's
-    // height needn't be whole quarter pixels (Mario Party's Cast Aways draws its sky 13/6 times as tall, 8.67 of them):
+    // magnified), how tall one texel is drawn in quarter pixels, as the nearest whole number of lines (so the join and
+    // the strips beside it are edged on lines' tops where the join is; see the header): 0 where it doesn't. A texel's
+    // height needn't be whole lines (Mario Party's Cast Aways draws its sky 13/6 times as tall, 2.17 of them, so 2):
     // b goes on from a where a's step, which the game rounds to an s5.10, takes it to b's first row within as far as
     // that rounding can over a's height.
     int32_t join_height(const Strip& a, const Strip& b) {
@@ -775,7 +778,7 @@ namespace {
             (a.dsdx != b.dsdx) || (a.dtdy != b.dtdy) || (a.dtdy <= 0) || (a.dtdy >= STEP_ONE)) {
             return 0;
         }
-        int32_t height = (4 * STEP_ONE + a.dtdy / 2) / a.dtdy;
+        int32_t height = 4 * ((STEP_ONE + a.dtdy / 2) / a.dtdy);
         // How far a's texture coordinate goes down it, in s5.10 by quarter pixels: in s10.5, 128 times less.
         int32_t drawn = (a.yh - a.yl) * a.dtdy;
         if (((a.yh - a.yl) <= 2 * height) || ((b.yh - b.yl) <= 2 * height) ||
@@ -788,7 +791,7 @@ namespace {
     }
 
     // How far a strip's texture coordinate goes in height quarter pixels at its step dtdy, in s10.5, the nearest: one
-    // texel (TEXEL) where height is one texel's exactly.
+    // texel (TEXEL) where height is one texel's exactly (a sprite drawn 1, 2 or 4 times as tall).
     int32_t texels_down(int32_t height, int32_t dtdy) {
         return (height * dtdy + 64) / 128;
     }
