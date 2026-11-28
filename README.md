@@ -80,6 +80,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   are tagged a slot each, and drawn at their own matrix where a slot is new or handed on to another effect: untagged,
   Coin Block Bash's coins, puffs and shadows were paired with each other as they came and went, a coin drawn huge and
   a shadow stretched into a line across the field in the frames between.
+  And as the queue's draw pops a part, Mario Party 1's Boo, see-through, has his body write depth, so the thin strip
+  where his cheek lies over his side isn't blended twice, a line across him at a high resolution.
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a

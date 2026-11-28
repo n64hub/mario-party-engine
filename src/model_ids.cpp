@@ -158,6 +158,8 @@ namespace {
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
     bool pushed = false;
+    // Where the part being drawn starts in the list (mp_model_push's `at`), for boo_writes_depth.
+    gpr part_start = 0;
 
     // A part's matrix's axes (its first three rows, each made 1 long, or 0) and its determinant's sign (0 where it
     // collapses what it draws).
@@ -632,6 +634,7 @@ static gpr untagged(uint8_t* rdram, gpr at, int32_t camera) {
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                               int32_t list_bytes) {
     pushed = false;
+    part_start = at;
     if ((place < 0) || (place >= QUEUE)) {
         return at;
     }
@@ -743,7 +746,74 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     return at;
 }
 
+// Mario Party 1's Boo is drawn see-through (RM_AA_ZB_XLU_SURF, which tests depth but writes none), and his body overlaps
+// itself in a thin strip from the corner of his mouth out to his outline: the cheek above the mouth in front of the
+// side of his body below it. With no depth written, the strip is blended twice, and at a high resolution it is a line
+// across Boo a pixel high, lighter or darker than his body by what is behind him (n64hub/mario-party-recomp#145: at the
+// end of his talk on a board, as he fades). The N64 drew no such line: at its resolution the strip is under a pixel,
+// and its coverage (CLR_ON_CVG) writes no colour where a triangle covers that little of a pixel, which RT64 doesn't
+// emulate. So his body writes depth (Z_UPD in its render mode), and the farther layer, drawn after the nearer, fails
+// RT64's depth test (LESS). In the scene he is the queue's last part drawn, so nothing drawn after him is hidden.
+// His body's list is the model's own data in RDRAM, which the part's commands call (a gSPDisplayList at a KSEG0
+// address). It is told by its commands below: its material (his combiner and render mode, the scene's lights) and the
+// first vertices and triangles of his mesh, as other see-through models share the material. The word is set in place.
+namespace {
+    struct Command {
+        uint32_t offset;
+        uint32_t word0;
+        uint32_t word1;
+        // The bits of word1 told apart.
+        uint32_t mask;
+    };
+    constexpr uint32_t Z_UPD = 0x20;
+    constexpr uint32_t BOO_RENDER_MODE = 0x48;
+    constexpr Command BOO_BODY[] = {
+        { 0x00, 0xDB0A0000, 0x00000000, ~0u },     { 0x08, 0xDB0A0004, 0x00000000, ~0u },
+        { 0x10, 0xDC080F0A, 0, 0 },                { 0x18, 0xD9FFFFFF, 0x00020000, ~0u },
+        { 0x28, 0xFC127624, 0xFFEF93C9, ~0u },     { 0x38, 0xE2001E01, 0x00000001, ~0u },
+        { BOO_RENDER_MODE, 0xE200001C, 0x005049D8, ~Z_UPD },
+        { 0x50, 0xDB0A0048, 0x9FA1D200, ~0u },     { 0x60, 0xDB0A0000, 0xA1ACC800, ~0u },
+        { 0xE0, 0x0100B016, 0x01000000, ~0u },     { 0xE8, 0x05000204, 0x00000000, ~0u },
+        { 0xF0, 0x07020608, 0x0002080A, ~0u },
+    };
+    constexpr uint32_t BOO_BODY_BYTES = 0xF8;
+    // How far into a part's commands its call to the body is looked for.
+    constexpr uint32_t PART_BYTES = 64 * 8;
+
+    bool kseg0(uint32_t address, uint32_t bytes) {
+        return (address >= 0x80000000u) && (address <= 0x80800000u - bytes) && ((address & 7) == 0);
+    }
+
+    bool boo_body(uint8_t* rdram, uint32_t list) {
+        for (const Command& command : BOO_BODY) {
+            gpr at = (gpr)(int32_t)(list + command.offset);
+            if (((uint32_t)MEM_W(0, at) != command.word0) ||
+                ((((uint32_t)MEM_W(4, at)) & command.mask) != (command.word1 & command.mask))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void boo_writes_depth(uint8_t* rdram, gpr from, gpr to) {
+        uint32_t start = (uint32_t)from, end = (uint32_t)to;
+        if (!kseg0(start, 0) || (end <= start) || ((end - start) > PART_BYTES)) {
+            return;
+        }
+        for (uint32_t at = start; at < end; at += 8) {
+            uint32_t word0 = (uint32_t)MEM_W(0, (gpr)(int32_t)at), word1 = (uint32_t)MEM_W(4, (gpr)(int32_t)at);
+            if (((word0 >> 24) != 0xDE) || !kseg0(word1, BOO_BODY_BYTES) || !boo_body(rdram, word1)) {
+                continue;
+            }
+            gpr mode = (gpr)(int32_t)(word1 + BOO_RENDER_MODE + 4);
+            MEM_W(0, mode) = (int32_t)((uint32_t)MEM_W(0, mode) | Z_UPD);
+        }
+    }
+}
+
 extern "C" void mp_model_pop(uint8_t* rdram, gpr gfx) {
+    boo_writes_depth(rdram, part_start, MEM_W(0, gfx));
+    part_start = 0;
     if (!pushed) {
         return;
     }
