@@ -98,7 +98,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
   patch that has to know how far past 4:3 the window shows (Mario Party's board camera, kept where the wider picture
   stays on the map), and for `src/hud.cpp`, whether a scene drawn no wider than an aspect past 4:3 stops short of the
-  window's edges.
+  window's edges. Its `mp_cull_widen()` and `mp_cull_restore()`, which a game's hooks call around its draw of a
+  camera's grid cells, widen the field of view that draw culls the cells with, a triangle on the ground sized for 4:3,
+  as far as the picture is wider, so a stage's walls and floor, and a board's coins and characters, reach the window's
+  edges instead of stopping just past 4:3's.
 - `docs/mods.md`: installing and making a mod for the three games' desktop builds, what each game gives a mod, and
   an example.
 - `src/board_options.cpp`: the board's two options on the General tab, Board Movement and Map Scrolling, each
