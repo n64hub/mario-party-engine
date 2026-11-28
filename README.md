@@ -74,7 +74,11 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   most of a camera's parts turned in a frame, the camera turned, and every part of it is moved partway in the frames
   between, not put at its new place where it moved far after resting, as RT64 otherwise does: the camera's view is in
   each part's matrix, so as a camera turned from rest the far parts jumped and the near ones didn't (Mario Party 1's
-  Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table).
+  Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table). So is
+  every part where most of a camera's parts moved 5 units or more in a frame, as where the camera moves: RT64 keeps no
+  step for a part moved partway outright, so in a frame where the turned count tipped under half mid-move, the parts
+  were put at their new place again (Mario Party 1's Mushroom Mix-Up, its characters' feet in the mushroom they stand
+  on as its opening's camera moved).
   A minigame's own effects, drawn from a table of its own outside the model walk (`mp_effect_push`, `mp_effect_pop`),
   are tagged a slot each, and drawn at their own matrix where a slot is new or handed on to another effect: untagged,
   Coin Block Bash's coins, puffs and shadows were paired with each other as they came and went, a coin drawn huge and
