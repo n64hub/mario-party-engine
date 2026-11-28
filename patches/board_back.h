@@ -51,6 +51,10 @@ s32 board_back_4x3(void);
 // window's width: 4:3 for a background that is a 2D picture as large as the screen or a stage built only as wide as
 // 4:3, with nothing past it, and wider for a stage whose 3D ends short of a wide window's edges.
 void board_back_scene_widest(f32 widest);
+// The screen's lines at its top and bottom and columns at its left and right that a TV's overscan hid, drawn black with
+// a 4:3 picture's sides, from a game's patch as each scene starts, 0 for none: for a scene that shows something wrong
+// there (src/wipe.cpp). A native, src/wipe.cpp's, which a game's patches/syms.ld gives an address to call it by.
+void recomp_picture_overscan(s32 top, s32 bottom, s32 left, s32 right);
 // A stage whose 3D ends at widest (its width over its height, where it is narrowest across the scene's play), from a
 // game's patch once the stage is made or as it plays: the times the patch makes it wider in x, about its middle under
 // the camera, so that it reaches the window's edges with a little to spare (1 in a window no wider), and the scene's
