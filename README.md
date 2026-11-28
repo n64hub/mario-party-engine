@@ -80,6 +80,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   are tagged a slot each, and drawn at their own matrix where a slot is new or handed on to another effect: untagged,
   Coin Block Bash's coins, puffs and shadows were paired with each other as they came and went, a coin drawn huge and
   a shadow stretched into a line across the field in the frames between.
+  And as the queue's draw pops a part, Mario Party 1's Boo, see-through, has his body write depth, so the thin strip
+  where his cheek lies over his side isn't blended twice, a line across him at a high resolution.
   A part drawn again at its matrix of the queue after its own draw (`mp_model_again`, `mp_model_again_pop`) is tagged
   as that part, in an ID of its own that is interpolated as the part is: Mario Party 1's Crane Game draws the claw's
   shadow on what lies under it as those parts again, a decal, and untagged, a frame between drew a part's shadow off
