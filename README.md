@@ -80,6 +80,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   are tagged a slot each, and drawn at their own matrix where a slot is new or handed on to another effect: untagged,
   Coin Block Bash's coins, puffs and shadows were paired with each other as they came and went, a coin drawn huge and
   a shadow stretched into a line across the field in the frames between.
+  A part drawn again at its matrix of the queue after its own draw (`mp_model_again`, `mp_model_again_pop`) is tagged
+  as that part, in an ID of its own that is interpolated as the part is: Mario Party 1's Crane Game draws the claw's
+  shadow on what lies under it as those parts again, a decal, and untagged, a frame between drew a part's shadow off
+  the part, so the decal drew nothing there and the shadow on a character under the claw was gone for that frame.
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
@@ -148,7 +152,7 @@ Anything else the games share comes here when a change needs it in more than one
   the wipe module and the end of a frame's last display list for `src/wipe.cpp` (their headers say which functions),
   and where a walk and the map's view take their pace, for `src/board_options.cpp`, and the model walk, its queue and
   the queue's draw for `src/model_ids.cpp` (its header says where), and a minigame's table of effects where it
-  draws one (Mario Party 1's Coin Block Bash).
+  draws one (Mario Party 1's Coin Block Bash), and where a minigame draws parts again (Crane Game's claw shadow).
 
 ## Changing it
 
