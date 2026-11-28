@@ -132,6 +132,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -878,6 +880,30 @@ namespace {
                     break;
             }
         }
+        // TEST ONLY (to be replaced): MP_SPRITE_LOG prints each sprite's strips once per distinct layout.
+        static const bool sprite_log = getenv("MP_SPRITE_LOG") != nullptr;
+        if (sprite_log && !strips.empty()) {
+            static std::unordered_map<uint64_t, int> seen;
+            uint64_t key = 1469598103934665603ull;
+            for (const Strip& s : strips) {
+                for (uint32_t v : {(uint32_t)s.xh, (uint32_t)s.yh, (uint32_t)s.xl, (uint32_t)s.yl, (uint32_t)s.t,
+                                   (uint32_t)s.dtdy, s.load.w0, s.load.w1}) {
+                    key = (key ^ v) * 1099511628211ull;
+                }
+            }
+            if (seen[key]++ == 0) {
+                fprintf(stderr, "SPRITE %08X omovl %02X strips %zu\n", (uint32_t)sprite_drawn,
+                        (uint32_t)MEM_W(0, (gpr)(int32_t)0x800CE200), strips.size());
+                for (const Strip& s : strips) {
+                    fprintf(stderr,
+                            "  rect x %d-%d y %d-%d (qpx) tile %d s %d t %d (s10.5) dsdx %d dtdy %d | img %08X %08X | "
+                            "load %08X %08X | size %08X %08X | own %08X %08X\n",
+                            s.xl, s.xh, s.yl, s.yh, s.tile, s.s, s.t, s.dsdx, s.dtdy, s.image.w0, s.image.w1,
+                            s.load.w0, s.load.w1, s.size.w0, s.size.w1, s.own_tile.w0, s.own_tile.w1);
+                }
+            }
+        }
+
         unpair_rescaled(rdram, start, commands, strips);
 
         // Each strip's join with the next: one texel's height, 0 for none.
