@@ -98,6 +98,7 @@
 
 void guMtxL2F(float mf[4][4], Mtx* m);
 void guMtxF2L(float mf[4][4], Mtx* m);
+f32 mp_aspect_ratio(void);
 
 static Mtx shifted_projections[SHIFTED];
 static Vp centred_viewports[SHIFTED];
@@ -307,6 +308,52 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     keep_wipe(left, top, right, bottom, G_EX_ORIGIN_NONE, left, G_EX_ORIGIN_NONE, right, top, bottom);
 }
 
+s32 camera_view_split(s32 left, s32 right) {
+    return (left < right) && ((left == SCREEN_W / 2) || (right == SCREEN_W / 2)) && !board_back_4x3();
+}
+
+// How much wider than 4:3 a split screen's pieces are drawn, and the window, each as a width over 4:3's: the window's,
+// or a scene's widest where that is narrower (board_back_widest).
+static f32 split_widths(f32* window) {
+    f32 widest = board_back_widest();
+    f32 times = mp_aspect_ratio() / WIDEST_4X3;
+
+    *window = times;
+    if ((widest > WIDEST_4X3) && (widest / WIDEST_4X3 < times)) {
+        return widest / WIDEST_4X3;
+    }
+    return times;
+}
+
+// An edge of a split screen's piece from the window's centre, as gEXSetScissor takes it under a projection RT64 draws
+// on the window's viewport (as wide as the window, its scissor's edges not narrowed to 4:3): as far from the screen's
+// middle as across the console's screen, times how much wider than 4:3 the pieces are drawn, over the window's.
+static s32 split_edge(s32 x, f32 times, f32 window) {
+    if (x == SCREEN_LAST) {
+        x = SCREEN_W;
+    }
+    return (s32)((x - SCREEN_W / 2) * times / window);
+}
+
+void camera_view_split_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
+    f32 window, times;
+    s32 left_x, right_x;
+
+    if (!camera_view_split(left, right)) {
+        camera_view_scissor(gfx, left, top, right, bottom);
+        return;
+    }
+    times = split_widths(&window);
+    left_x = split_edge(left, times, window);
+    right_x = split_edge(right, times, window);
+    spanning = FALSE;
+    gEXEnable((*gfx)++);
+    // Under the piece's own projection, so that RT64 draws it on the window's viewport.
+    span_width(gfx, G_EX_ORIGIN_LEFT, 0, G_EX_ORIGIN_RIGHT, 0);
+    gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, left_x, top, right_x, bottom);
+    keep_wipe(left, top, right, bottom, G_EX_ORIGIN_CENTER, left_x, G_EX_ORIGIN_CENTER, right_x, top, bottom);
+}
+
 void camera_view_span(Gfx** gfx) {
     if (spanning) {
         span_width(gfx, span_origins[0], span_edges[0], span_origins[1], span_edges[1]);
@@ -325,9 +372,44 @@ void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm,
     u8 aspect = G_EX_ASPECT_AUTO;
     u8 interpolate = G_EX_COMPONENT_AUTO;
 
+    // A piece of a split screen on the whole screen's viewport, its projection drawing on it what the piece's viewport
+    // drew, with its x from the piece's middle widened by how much wider than 4:3 the window is, and the piece's middle
+    // moved out as far as the pieces are widened: x = 640 + 640 * x' / w on the whole screen's viewport where the
+    // piece's drew vtrans + vscale * x / w (in quarter pixels), y = 480 - 480 * y' / w where it drew vtrans - vscale * y /
+    // w. RT64 leaves its projection as it is (G_EX_ASPECT_STRETCH) and draws it on a viewport as wide as the window.
+    if ((widened == CAMERA_VIEW_SPLIT) && (viewport->vp.vscale[0] != 0) && (viewport->vp.vscale[1] != 0)) {
+        Vp* whole = &centred_viewports[shifted_index];
+        Mtx* moved = &shifted_projections[shifted_index];
+        f32 window, times = split_widths(&window);
+        f32 sx = (f32)viewport->vp.vscale[0] / (SCREEN_W * 2 * window);
+        f32 dx = (f32)(viewport->vp.vtrans[0] - SCREEN_W * 2) * times / (SCREEN_W * 2 * window);
+        f32 sy = (f32)viewport->vp.vscale[1] / (SCREEN_H * 2);
+        f32 dy = (f32)(SCREEN_H * 2 - viewport->vp.vtrans[1]) / (SCREEN_H * 2);
+        f32 m[4][4];
+        s32 i;
+
+        shifted_index = (shifted_index + 1) % SHIFTED;
+        if (cut(camera, viewport)) {
+            interpolate = G_EX_COMPONENT_SKIP;
+        }
+        *whole = *viewport;
+        whole->vp.vscale[0] = SCREEN_W * 2;
+        whole->vp.vscale[1] = SCREEN_H * 2;
+        whole->vp.vtrans[0] = SCREEN_W * 2;
+        whole->vp.vtrans[1] = SCREEN_H * 2;
+        guMtxL2F(m, projection);
+        for (i = 0; i < 4; i++) {
+            m[i][0] = m[i][0] * sx + dx * m[i][3];
+            m[i][1] = m[i][1] * sy + dy * m[i][3];
+        }
+        guMtxF2L(m, moved);
+        viewport = whole;
+        projection = moved;
+        aspect = G_EX_ASPECT_STRETCH;
+    }
     // The viewport in the middle and what it was moved by in the projection: (x, y) at the viewport's middle plus its
     // scale times the projection's (x, y) / w, the y down.
-    if (widened && (viewport->vp.vscale[0] != 0) && (viewport->vp.vscale[1] != 0)) {
+    else if (widened && (viewport->vp.vscale[0] != 0) && (viewport->vp.vscale[1] != 0)) {
         Vp* centred = &centred_viewports[shifted_index];
         Mtx* shifted = &shifted_projections[shifted_index];
         f32 dx = (f32)(viewport->vp.vtrans[0] - SCREEN_W * 2) / viewport->vp.vscale[0];
