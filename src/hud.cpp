@@ -90,6 +90,13 @@
 //   (G_EX_ASPECT_ADJUST): RT64 by itself would stretch the rectangles of one that covers the scissor's whole width,
 //   only its middle showing between the black at the window's sides and what stands on it no longer on it (Mario
 //   Party 2's Bumper Balloon Cars' sand under the cars).
+// - mp_hud_picture_start and mp_hud_picture_end, from a game's hooks around a function that draws a picture behind
+//   the scene in its own code, not through its sprite manager, with the address of the display list's pointer it
+//   draws through: in a 4:3 picture its rectangles are kept to 4:3 (G_EX_ASPECT_ADJUST) until its end, as a sprite's
+//   picture is. Mario Party 2's func_8007A7FC_7B3FC draws Balloon Burst's platforms and pumps, gauges and all, as 46
+//   rectangles a few rows each, each covering the scissor's whole width: RT64 by itself stretched them over the
+//   window, the gauges a third wider than the 4:3 middle the scene's 3D (their needles) is drawn in, the needles off
+//   them.
 // - mp_hud_message_group where the game's message module makes the sprite group of a message's letters (Mario Party's
 //   GMesFontCreate), with the group and its members' offset in it: in a picture wider than 4:3 its letters are drawn
 //   out to the window's edges, under a scissor aligned to them (as a panel's), in the 4:3 middle still. The game
@@ -253,6 +260,8 @@ namespace {
     // as wide as the screen, with an aspect of its own until its end.
     float sprite_width = 0.0f;
     bool sprite_picture = false;
+    // Whether a picture a game draws in its own code, from mp_hud_picture_start, is kept to 4:3 until its end.
+    bool own_picture = false;
     // Whether the one being drawn is a piece of the bar, stretched as a picture under a scissor of the whole window.
     bool sprite_bar = false;
     // A piece of the bar drawn from the screen's left edge: the sprite, 0 for none, and the x and scale it had.
@@ -1128,6 +1137,26 @@ extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
         return (float)SCREEN_W;
     }
     return (float)(SCREEN_W + sprite_reach * ((sprite_moved != 0) ? 2 : 1));
+}
+
+extern "C" void mp_hud_picture_start(uint8_t* rdram, gpr gfx) {
+    own_picture = picture_4x3;
+    if (own_picture) {
+        GfxCommand commands[2];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_ADJUST);
+        emit(rdram, gfx, commands, 2);
+    }
+}
+
+extern "C" void mp_hud_picture_end(uint8_t* rdram, gpr gfx) {
+    if (own_picture) {
+        own_picture = false;
+        GfxCommand commands[2];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);
+        emit(rdram, gfx, commands, 2);
+    }
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
