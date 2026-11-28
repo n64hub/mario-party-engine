@@ -1313,3 +1313,125 @@ extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     whole_screen(&commands[6]);
     emit(rdram, gfx, commands, 7);
 }
+
+// TEST ONLY (to be replaced): MP_DL_LOG prints the draws of one frame of the minigame rules screen (omovl 0x70) that
+// touch the preview window, with their texture state, from ScExecuteGraphics' task.
+namespace {
+struct DlLog {
+    uint8_t* rdram;
+    uint32_t seg[16] = {};
+    float mv[10][4][4];
+    int mvi = 0;
+    float proj[4][4];
+    float vtx[64][4]; // screen x, y, s, t
+    bool vok[64] = {};
+    char tex[1024] = "";
+    bool tex_printed = false;
+    uint32_t timg = 0, tw0 = 0, tw1 = 0, lw0 = 0, lw1 = 0, sw0 = 0, sw1 = 0, geom = 0, om0 = 0, om1 = 0;
+    int count = 0;
+
+    gpr addr(uint32_t a) { return (gpr)(int32_t)(0x80000000u | ((seg[(a >> 24) & 0xF] + (a & 0xFFFFFF)) & 0x7FFFFF)); }
+    void matrix(gpr at, float m[4][4]) {
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+            int32_t v = ((int32_t)MEM_H(2 * (i * 4 + j), at) << 16) | (uint16_t)MEM_HU(32 + 2 * (i * 4 + j), at);
+            m[i][j] = v / 65536.0f;
+        }
+    }
+    static void mul(float a[4][4], float b[4][4], float o[4][4]) {
+        float t[4][4];
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { t[i][j] = 0; for (int k = 0; k < 4; k++) t[i][j] += a[i][k] * b[k][j]; }
+        memcpy(o, t, sizeof(t));
+    }
+    void state() {
+        snprintf(tex, sizeof(tex), "  TEX img %08X tile %08X %08X load %08X %08X size %08X %08X geom %08X om %08X %08X",
+                 timg, tw0, tw1, lw0, lw1, sw0, sw1, geom, om0, om1);
+        tex_printed = false;
+    }
+    void tri(int a, int b, int c) {
+        int v[3] = {a, b, c};
+        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+        for (int i : v) { if (!vok[i]) return; x0 = std::min(x0, vtx[i][0]); x1 = std::max(x1, vtx[i][0]); y0 = std::min(y0, vtx[i][1]); y1 = std::max(y1, vtx[i][1]); }
+        if (x1 < 140 || x0 > 300 || y1 < 100 || y0 > 160) return;
+        if (!tex_printed) { fprintf(stderr, "%s\n", tex); tex_printed = true; }
+        fprintf(stderr, "    TRI");
+        for (int i : v) fprintf(stderr, " (%.2f,%.2f st %.1f,%.1f)", vtx[i][0], vtx[i][1], vtx[i][2], vtx[i][3]);
+        fprintf(stderr, "\n");
+    }
+    void walk(uint32_t list, int depth) {
+        gpr at = addr(list);
+        for (int n = 0; n < 200000; n++, at += 8) {
+            uint32_t w0 = (uint32_t)MEM_W(0, at), w1 = (uint32_t)MEM_W(4, at);
+            switch (w0 >> 24) {
+            case 0xDE: if (depth < 16) walk(w1, depth + 1); if (w0 & 0x00010000) return; break;
+            case 0xDF: return;
+            case 0xDB: if (((w0 >> 16) & 0xFF) == 6) seg[((w0 & 0xFFFF) / 4) & 0xF] = w1 & 0xFFFFFF; break;
+            case 0xDA: {
+                float m[4][4]; matrix(addr(w1), m); uint32_t p = (w0 & 0xFF) ^ 1;
+                if (p & 4) { if (p & 2) memcpy(proj, m, sizeof(m)); else mul(m, proj, proj); }
+                else {
+                    if ((p & 1) && mvi < 9) { memcpy(mv[mvi + 1], mv[mvi], sizeof(m)); mvi++; }
+                    if (p & 2) memcpy(mv[mvi], m, sizeof(m)); else mul(m, mv[mvi], mv[mvi]);
+                }
+                break;
+            }
+            case 0xD8: mvi = std::max(0, mvi - (int)(w1 / 64)); break;
+            case 0x01: {
+                int cnt = (w0 >> 12) & 0xFF, v0 = ((w0 >> 1) & 0x7F) - cnt;
+                float mvp[4][4]; mul(mv[mvi], proj, mvp);
+                gpr va = addr(w1);
+                for (int i = 0; i < cnt && v0 + i < 64 && v0 + i >= 0; i++) {
+                    gpr q = va + i * 16;
+                    float p[4] = {(float)(int16_t)MEM_H(0, q), (float)(int16_t)MEM_H(2, q), (float)(int16_t)MEM_H(4, q), 1};
+                    float c[4] = {};
+                    for (int j = 0; j < 4; j++) for (int k = 0; k < 4; k++) c[j] += p[k] * mvp[k][j];
+                    float* o = vtx[v0 + i];
+                    if (c[3] <= 0) { vok[v0 + i] = false; continue; }
+                    o[0] = 160 + 160 * c[0] / c[3]; o[1] = 120 - 120 * c[1] / c[3];
+                    o[2] = (int16_t)MEM_H(8, q) / 32.0f; o[3] = (int16_t)MEM_H(10, q) / 32.0f;
+                    vok[v0 + i] = true;
+                }
+                break;
+            }
+            case 0x05: tri(((w0 >> 16) & 0xFF) / 2, ((w0 >> 8) & 0xFF) / 2, (w0 & 0xFF) / 2); break;
+            case 0x06: case 0x07:
+                tri(((w0 >> 16) & 0xFF) / 2, ((w0 >> 8) & 0xFF) / 2, (w0 & 0xFF) / 2);
+                tri(((w1 >> 16) & 0xFF) / 2, ((w1 >> 8) & 0xFF) / 2, (w1 & 0xFF) / 2);
+                break;
+            case 0xFD: timg = w0; lw0 = w1; state(); break;
+            case 0xF5: if (((w1 >> 24) & 7) == 0) { tw0 = w0; tw1 = w1; state(); } break;
+            case 0xF3: case 0xF4: lw0 = w0; lw1 = w1; state(); break;
+            case 0xF2: if (((w1 >> 24) & 7) == 0) { sw0 = w0; sw1 = w1; state(); } break;
+            case 0xD9: geom = (geom & w0) | w1; break;
+            case 0xE2: om1 = w1; state(); break;
+            case 0xE3: om0 = w1; state(); break;
+            case 0xE4: {
+                float xl = ((w1 >> 12) & 0xFFF) / 4.0f, yl = (w1 & 0xFFF) / 4.0f, xh = ((w0 >> 12) & 0xFFF) / 4.0f, yh = (w0 & 0xFFF) / 4.0f;
+                uint32_t e1 = (uint32_t)MEM_W(12, at), f1 = (uint32_t)MEM_W(20, at);
+                if (xh >= 140 && xl <= 300 && yh >= 100 && yl <= 160) {
+                    if (!tex_printed) { fprintf(stderr, "%s\n", tex); tex_printed = true; }
+                    fprintf(stderr, "    RECT %.2f-%.2f y %.2f-%.2f tile %d st %08X dsdt %08X\n", xl, xh, yl, yh, (w1 >> 24) & 7, e1, f1);
+                }
+                at += 16;
+                break;
+            }
+            }
+        }
+    }
+};
+}
+
+extern "C" void mp_dl_log(uint8_t* rdram, gpr task) {
+    static const bool on = getenv("MP_DL_LOG") != nullptr;
+    static int frames = 0;
+    if (!on || MEM_W(0, task) != 1 || MEM_W(0, (gpr)(int32_t)0x800CE200) != 0x70) return;
+    frames++;
+    if (frames != 150 && frames != 300) return;
+    fprintf(stderr, "DLFRAME %d list %08X\n", frames, (uint32_t)MEM_W(0x30, task));
+    static DlLog log;
+    log = DlLog{};
+    log.rdram = rdram;
+    for (auto& m : log.mv) for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) m[i][j] = i == j;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) log.proj[i][j] = i == j;
+    log.walk((uint32_t)MEM_W(0x30, task), 0);
+    fprintf(stderr, "DLEND\n");
+}
