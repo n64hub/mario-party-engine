@@ -114,8 +114,19 @@
 // or more), as each part turns with it: the room's parts don't turn otherwise, nor do most of the characters'. Not a
 // part alone, as one the game turns to face the camera never turns with it: Toad's crystal ball's glass was put at
 // its new place while the ball inside it, which turns, was drawn partway. The parts of the camera already tagged in
-// the frame have their group rewritten as the count tips one way or the other. Where the camera didn't turn, a part's
-// place is still RT64's to choose, so one the game puts somewhere else in a frame is still put there, not swept.
+// the frame have their group rewritten as the count tips one way or the other.
+//
+// And so where most of a camera's parts moved 5 units or more since the frame before, as where it moves. A place
+// interpolated outright leaves RT64 no step of the frame before (rt64_rigid_body.cpp sets it to 0), so in the frame
+// after, its place RT64's to choose again, a part that moved 5 units or more is put at its new place, as from rest.
+// Mario Party 1's Mushroom Mix-Up opens with its camera moving and turning a little, every one of its 68 parts moving
+// 37 units a frame and 13 to 38 of them turning: the count tipped under half and back from frame to frame, and in each
+// frame it tipped under, the characters were put at their new place in the first frame between and their feet went
+// into the mushroom they stand on (Yoshi's shoes went from 140-210 of a 1280x720 dump's pixels to 7-37 for 2 or 3
+// frames between, four times in the camera's first second, at 144 Hz). Where most of its parts move that far without
+// it (the characters running), their places are interpolated outright too, so one the game puts somewhere else among
+// them is swept for a frame, as where the camera turned. Where the camera neither turned nor moved, a part's place is
+// still RT64's to choose, so one the game puts somewhere else in a frame is still put there.
 //
 // A game gives each frame's display list a size of its own (each scene sets it), and the tags take room in it, four
 // commands a part: a part whose tag would leave less than a quarter of the list after it is left untagged, for RT64 to
@@ -249,11 +260,14 @@ namespace {
     Placed placed[PLACED];
     size_t placed_count = 0;
     int32_t placed_frame = 0;
-    // Each camera's parts interpolated and paired in the frame so far, how many of them turned since the frame before,
-    // and whether that is most of them, which their groups say.
+    // Each camera's parts interpolated and paired in the frame so far, how many of them turned and how many moved 5
+    // units or more since the frame before, and whether either is most of them, which their groups say.
     int32_t paired_parts[CAMERAS];
     int32_t turned_parts[CAMERAS];
+    int32_t moved_parts[CAMERAS];
     bool turning_camera[CAMERAS];
+    // How far a part moved in a frame, at least, for RT64 to put it at its new place where it had no step before.
+    constexpr float MOVING = 5.0f;
 
     // Whether two origins are one place: within a hundredth of their distance from the eye.
     bool same_place(const float a[3], const float b[3]) {
@@ -500,10 +514,11 @@ namespace {
     // before, or the other way round, or it turned more than 75 degrees since the frame before, unless that goes on
     // with its turn of the frame before (the header says how), or it blinked: it moved a tenth of its distance from the
     // eye or more since the frame before, back to its place of the frame before that. Whether it turned at all since
-    // the frame before goes in turned, and whether it turned more than 75 degrees, going on with its turn, in went_on.
+    // the frame before goes in turned, whether it turned more than 75 degrees, going on with its turn, in went_on, and
+    // whether it moved 5 units or more since the frame before in moved.
     // IDs not drawn for a second are forgotten.
     bool interpolated(uint32_t id, const Pose& now, const float origin[3], int32_t frame, bool& paired, bool& turned,
-                      bool& went_on) {
+                      bool& went_on, bool& moved) {
         if (frame != seen_frame) {
             if (seen.size() > SLOTS * 64) {
                 for (auto it = seen.begin(); it != seen.end();) {
@@ -516,6 +531,7 @@ namespace {
         paired = (it != seen.end()) && (it->second.frame == frame - 1);
         turned = paired && turning(it->second.pose, now);
         went_on = false;
+        moved = false;
         Seen next{ frame, now, { 0.0f, 0.0f, 0.0f }, { origin[0], origin[1], origin[2] }, 0, { 0.0f, 0.0f, 0.0f } };
         next.before_frame = (it != seen.end()) ? it->second.frame : (frame - 2);
         bool far = false;
@@ -526,6 +542,11 @@ namespace {
             }
         }
         if (paired) {
+            float d = 0.0f;
+            for (int c = 0; c < 3; c++) {
+                d += (origin[c] - it->second.origin[c]) * (origin[c] - it->second.origin[c]);
+            }
+            moved = d >= (MOVING * MOVING);
             blinked = (it->second.before_frame == frame - 2) && blink_far(it->second.origin, origin) &&
                       same_place(it->second.before, origin);
             float axis[3];
@@ -616,7 +637,7 @@ extern "C" void mp_model_queued(uint8_t*, int32_t place, int32_t part, gpr model
 }
 
 // The group's two commands at the address: the part interpolated (its components AUTO, and its place INTERPOLATE where
-// its camera turned) or drawn at its own matrix.
+// its camera turned or moved) or drawn at its own matrix.
 static void group(uint8_t* rdram, gpr at, uint32_t id, bool keep, bool turned) {
     uint8_t component = keep ? G_EX_COMPONENT_AUTO : G_EX_COMPONENT_SKIP;
     uint8_t position = (keep && turned) ? G_EX_COMPONENT_INTERPOLATE : component;
@@ -682,7 +703,8 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     bool paired = false;
     bool turned = false;
     bool went_on = false;
-    bool keep = interpolated(id, now, origin, frame, paired, turned, went_on) && !cut[camera];
+    bool moved = false;
+    bool keep = interpolated(id, now, origin, frame, paired, turned, went_on, moved) && !cut[camera];
 
     // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
     // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
@@ -692,6 +714,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         for (int c = 0; c < CAMERAS; c++) {
             paired_parts[c] = 0;
             turned_parts[c] = 0;
+            moved_parts[c] = 0;
             turning_camera[c] = false;
         }
     }
@@ -738,12 +761,14 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         }
     }
 
-    // Whether the camera turned, by most of its parts (the header says why), its parts tagged before this one
+    // Whether the camera turned or moved, by most of its parts (the header says why), its parts tagged before this one
     // rewritten where that changed.
     if (keep && paired) {
         paired_parts[camera]++;
         turned_parts[camera] += turned ? 1 : 0;
-        bool turning_now = (turned_parts[camera] * 2) > paired_parts[camera];
+        moved_parts[camera] += moved ? 1 : 0;
+        bool turning_now = ((turned_parts[camera] * 2) > paired_parts[camera]) ||
+                           ((moved_parts[camera] * 2) > paired_parts[camera]);
         if (turning_now != turning_camera[camera]) {
             turning_camera[camera] = turning_now;
             for (size_t i = 0; i < placed_count; i++) {
