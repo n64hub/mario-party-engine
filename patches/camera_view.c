@@ -30,7 +30,12 @@
 //   were squeezed into 4:3 under the wipe for it. The game's patch draws the triangle again after that list
 //   (camera_view_span_after), and after the clip ratio its code sets in the main list before it draws the characters
 //   (camera_view_span). A screen split between players (a minigame's halves and quarters, at 160) keeps the game's,
-//   and so does every camera while the picture is 4:3
+//   unless the game's patch widens it (camera_view_split_scissor): each piece's outer edge goes to the window's side and
+//   its edge at 160 to the window's middle, its 3D on a viewport the window's width, from its centre (gEXViewport), with
+//   the piece's own place in the screen in its projection, as wide as the window over the screen, so a piece drawn
+//   from one of the screen's edges and short of the other, as Desert Dash's halves slide in from the whole screen, is
+//   drawn where its scissor is at every step. Mario Party's Desert Dash started its race at 16:9 and snapped to 4:3
+//   once the halves were drawn. Every camera keeps the game's while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
 //   at the window's sides. RT64 fits a pass to 4:3 (each scissor's edges and each 3D view's viewport) only when the
@@ -90,6 +95,9 @@
 #define WIPE_STEP 32
 // The projections and viewports of the widened cameras, more than the frames in flight use.
 #define SHIFTED 16
+// Half the width of a split screen's piece's viewport (camera_view_projection), in quarter pixels: 640 pixels to each
+// side of the window's centre, past the edges of any window up to 32:9 and more.
+#define SPLIT_VIEW (640 * 4)
 // The cameras whose last viewport is kept, to tell a cut from a pan.
 #define CAMERAS 16
 // A viewport moved further than this between two frames, in its quarter pixels, is a cut.
@@ -98,6 +106,7 @@
 
 void guMtxL2F(float mf[4][4], Mtx* m);
 void guMtxF2L(float mf[4][4], Mtx* m);
+f32 mp_aspect_ratio(void);
 
 static Mtx shifted_projections[SHIFTED];
 static Vp centred_viewports[SHIFTED];
@@ -307,6 +316,66 @@ void camera_view_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
     keep_wipe(left, top, right, bottom, G_EX_ORIGIN_NONE, left, G_EX_ORIGIN_NONE, right, top, bottom);
 }
 
+// The whole screen's right edge, at 319 as some scenes give it.
+static s32 right_edge(s32 right) {
+    return (right == SCREEN_LAST) ? SCREEN_W : right;
+}
+
+s32 camera_view_split(s32 left, s32 right) {
+    right = right_edge(right);
+    if ((left >= right) || board_back_4x3()) {
+        return FALSE;
+    }
+    // A piece at the screen's left or right side, the other edge inside it (as the pieces slide in from the whole
+    // screen), or with an edge on the screen's middle.
+    return ((left == 0) && (right < SCREEN_W)) || ((left > 0) && (right == SCREEN_W)) || (left == SCREEN_W / 2) ||
+           (right == SCREEN_W / 2);
+}
+
+// How much wider than 4:3 a split screen's pieces are drawn, as a width over 4:3's: the window's, or a scene's widest
+// where that is narrower (board_back_widest).
+static f32 split_times(void) {
+    f32 widest = board_back_widest();
+    f32 times = mp_aspect_ratio() / WIDEST_4X3;
+
+    if ((widest > WIDEST_4X3) && (widest / WIDEST_4X3 < times)) {
+        return widest / WIDEST_4X3;
+    }
+    return times;
+}
+
+// An edge of a split screen's piece as gEXSetScissor takes it, its origin and its x from there (in pixels of a 4:3
+// picture of the window's height): from the window's centre, as far from the screen's middle as across the console's
+// screen, times how much wider than 4:3 the pieces are drawn; or, at the screen's side while they are as wide as the
+// window, the window's edge itself, which a rounded x from its centre stopped a few of its pixels short of.
+static s32 split_edge(s32 x, f32 times, u16* origin) {
+    x = right_edge(x);
+    if ((times >= mp_aspect_ratio() / WIDEST_4X3) && ((x == 0) || (x == SCREEN_W))) {
+        *origin = (x == 0) ? G_EX_ORIGIN_LEFT : G_EX_ORIGIN_RIGHT;
+        return 0;
+    }
+    *origin = G_EX_ORIGIN_CENTER;
+    return (s32)((x - SCREEN_W / 2) * times);
+}
+
+void camera_view_split_scissor(Gfx** gfx, s32 left, s32 top, s32 right, s32 bottom) {
+    f32 times;
+    u16 left_origin, right_origin;
+    s32 left_x, right_x;
+
+    if (!camera_view_split(left, right)) {
+        camera_view_scissor(gfx, left, top, right, bottom);
+        return;
+    }
+    times = split_times();
+    left_x = split_edge(left, times, &left_origin);
+    right_x = split_edge(right, times, &right_origin);
+    spanning = FALSE;
+    split_whole(gfx);
+    gEXSetScissor((*gfx)++, G_SC_NON_INTERLACE, left_origin, right_origin, left_x, top, right_x, bottom);
+    keep_wipe(left, top, right, bottom, left_origin, left_x, right_origin, right_x, top, bottom);
+}
+
 void camera_view_span(Gfx** gfx) {
     if (spanning) {
         span_width(gfx, span_origins[0], span_edges[0], span_origins[1], span_edges[1]);
@@ -324,10 +393,48 @@ void camera_view_span_after(Gfx** gfx, Gfx* list) {
 void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm, Mtx* projection, s32 widened) {
     u8 aspect = G_EX_ASPECT_AUTO;
     u8 interpolate = G_EX_COMPONENT_AUTO;
+    u16 origin = G_EX_ORIGIN_NONE;
 
+    // A piece of a split screen on a viewport from the window's centre (G_EX_ORIGIN_CENTER), which RT64 draws at the
+    // window's scale without narrowing it to 4:3, SPLIT_VIEW quarter pixels to each side, past any window's edges. Its
+    // projection draws on it what the piece's viewport drew, with the piece's middle as far from the window's centre as
+    // from the screen's middle times how much wider than 4:3 the pieces are drawn, and its x from there as the piece drew
+    // it, so that what the piece shows is widened with it: x = SPLIT_VIEW * x' / w from the centre where the piece drew
+    // vtrans + vscale * x / w (in quarter pixels), y = 480 - 480 * y' / w where it drew vtrans - vscale * y / w.
+    if ((widened == CAMERA_VIEW_SPLIT) && (viewport->vp.vscale[0] != 0) && (viewport->vp.vscale[1] != 0)) {
+        Vp* whole = &centred_viewports[shifted_index];
+        Mtx* moved = &shifted_projections[shifted_index];
+        f32 times = split_times();
+        f32 sx = (f32)viewport->vp.vscale[0] / SPLIT_VIEW;
+        f32 dx = (f32)(viewport->vp.vtrans[0] - SCREEN_W * 2) * times / SPLIT_VIEW;
+        f32 sy = (f32)viewport->vp.vscale[1] / (SCREEN_H * 2);
+        f32 dy = (f32)(SCREEN_H * 2 - viewport->vp.vtrans[1]) / (SCREEN_H * 2);
+        f32 m[4][4];
+        s32 i;
+
+        shifted_index = (shifted_index + 1) % SHIFTED;
+        if (cut(camera, viewport)) {
+            interpolate = G_EX_COMPONENT_SKIP;
+        }
+        *whole = *viewport;
+        whole->vp.vscale[0] = SPLIT_VIEW;
+        whole->vp.vscale[1] = SCREEN_H * 2;
+        whole->vp.vtrans[0] = 0;
+        whole->vp.vtrans[1] = SCREEN_H * 2;
+        guMtxL2F(m, projection);
+        for (i = 0; i < 4; i++) {
+            m[i][0] = m[i][0] * sx + dx * m[i][3];
+            m[i][1] = m[i][1] * sy + dy * m[i][3];
+        }
+        guMtxF2L(m, moved);
+        viewport = whole;
+        projection = moved;
+        origin = G_EX_ORIGIN_CENTER;
+        aspect = G_EX_ASPECT_STRETCH;
+    }
     // The viewport in the middle and what it was moved by in the projection: (x, y) at the viewport's middle plus its
     // scale times the projection's (x, y) / w, the y down.
-    if (widened && (viewport->vp.vscale[0] != 0) && (viewport->vp.vscale[1] != 0)) {
+    else if (widened && (viewport->vp.vscale[0] != 0) && (viewport->vp.vscale[1] != 0)) {
         Vp* centred = &centred_viewports[shifted_index];
         Mtx* shifted = &shifted_projections[shifted_index];
         f32 dx = (f32)(viewport->vp.vtrans[0] - SCREEN_W * 2) / viewport->vp.vscale[0];
@@ -353,9 +460,14 @@ void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm,
         aspect = G_EX_ASPECT_ADJUST;
     }
 
-    gSPViewport((*gfx)++, viewport);
-    gSPPerspNormalize((*gfx)++, persp_norm);
     gEXEnable((*gfx)++);
+    if (origin != G_EX_ORIGIN_NONE) {
+        gEXViewport((*gfx)++, origin, viewport);
+    }
+    else {
+        gSPViewport((*gfx)++, viewport);
+    }
+    gSPPerspNormalize((*gfx)++, persp_norm);
     gEXMatrixGroup((*gfx)++, G_EX_ID_AUTO, G_EX_INTERPOLATE_DECOMPOSE, G_EX_NOPUSH, G_MTX_PROJECTION, interpolate,
                    interpolate, interpolate, interpolate, interpolate, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO,
                    G_EX_ORDER_AUTO, G_EX_EDIT_NONE, aspect, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_AUTO);
