@@ -382,9 +382,11 @@ namespace {
                 }
                 size_t n = commands.size();
                 commands.resize(n + (stars ? 5 : 3));
-                // From 0 to its width, placed from the screen's centre at left.
-                gEXSetRectAlign(&commands[n], G_EX_ORIGIN_CENTER, G_EX_ORIGIN_CENTER, (left - HALF) * 4, 0,
-                                (left - HALF) * 4, 0);
+                // From 0 to its width, moved to left: with no origin, as the game's own rings are placed, so the
+                // column meets them on the same pixel. An edge with an origin is snapped to the picture's grid of
+                // whole pixels, a pixel short of where the game's edge is at some window sizes (1280x720 put a
+                // line of the scene between ring 5's two halves and doubled its colour on the right).
+                gEXSetRectAlign(&commands[n], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, left * 4, 0, left * 4, 0);
                 if (!stars) {
                     fill(&commands[n + 2], 0, width);
                     continue;
