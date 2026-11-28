@@ -46,7 +46,8 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   bar between its two views) is stretched over the window from edge to edge, its racers' icons, start and finish going
   across it with it.
   A sprite drawn magnified a few rows at a time (the sky behind a minigame's rules) is filtered across each join of its
-  strips, with no hard line along it.
+  strips, with no hard line along it. One drawn in strips that grows or shrinks (Mario Party 3's title logo as it
+  bounces) is drawn whole at each game frame's size in the frames between, not half at the size before.
 - `src/wipe.cpp`: a screen wipe past 4:3, its colour (an iris's black around the shape, a fade) drawn out to the
   window's left and right edges, through hooks in the wipe module, whose code is the decompilations' asm. A shape
   wipe's shape (a star, a circle) is made as many times larger as the picture is wider than 4:3, so it sweeps past the
@@ -54,7 +55,10 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   game's, as the colour round it is, where RT64's rect interpolation drew it between two sizes. In a 4:3
   picture it draws black over the window's sides at the end of each frame, over whatever the scene drew there, and a
   fade of the whole screen under a scissor of the whole screen (Mario Party 3's opening draws its flash of white under
-  a scissor 8 pixels inside it).
+  a scissor 8 pixels inside it). The screen's outermost lines and columns a game's patch names for a scene
+  (`recomp_picture_overscan`), which a TV's overscan hid and where the scene shows something wrong, are black with the
+  sides (Mario Party 3's Picking Panic, whose stripe between its teams stays on the last two lines for its winners, and
+  Awful Tower, whose rightmost quarter shows another picture in the last two columns).
   `src/display_list.h` is what it and `src/hud.cpp` write into a game's display list with.
 - `src/model_ids.cpp`: a 3D model's parts paired with their own between the game's frames, each part's matrix tagged
   with an ID of its model and its part (gEXMatrixGroup), through hooks in the model walk and the draw of its queue,
@@ -74,7 +78,11 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   most of a camera's parts turned in a frame, the camera turned, and every part of it is moved partway in the frames
   between, not put at its new place where it moved far after resting, as RT64 otherwise does: the camera's view is in
   each part's matrix, so as a camera turned from rest the far parts jumped and the near ones didn't (Mario Party 1's
-  Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table).
+  Mini-Game House, its red door out of its archway as the camera turned to the Pot o' Skills or the table). So is
+  every part where most of a camera's parts moved 5 units or more in a frame, as where the camera moves: RT64 keeps no
+  step for a part moved partway outright, so in a frame where the turned count tipped under half mid-move, the parts
+  were put at their new place again (Mario Party 1's Mushroom Mix-Up, its characters' feet in the mushroom they stand
+  on as its opening's camera moved).
   A minigame's own effects, drawn from a table of its own outside the model walk (`mp_effect_push`, `mp_effect_pop`),
   are tagged a slot each, and drawn at their own matrix where a slot is new or handed on to another effect: untagged,
   Coin Block Bash's coins, puffs and shadows were paired with each other as they came and went, a coin drawn huge and
@@ -84,6 +92,12 @@ It holds no ROM and nothing made from one, and builds only as part of a game.
   Run's look-alike wall bricks were paired with the other view's or a neighbour's, and the walls came apart at their
   seams in the frames between. A part's ID has the matrix it is drawn through too, numbered as the nearest of
   the frame before: Bobsled Run draws both views' cells with one camera, each view through its own matrix.
+  And as the queue's draw pops a part, Mario Party 1's Boo, see-through, has his body write depth, so the thin strip
+  where his cheek lies over his side isn't blended twice, a line across him at a high resolution.
+  A part drawn again at its matrix of the queue after its own draw (`mp_model_again`, `mp_model_again_pop`) is tagged
+  as that part, in an ID of its own that is interpolated as the part is: Mario Party 1's Crane Game draws the claw's
+  shadow on what lies under it as those parts again, a decal, and untagged, a frame between drew a part's shadow off
+  the part, so the decal drew nothing there and the shadow on a character under the claw was gone for that frame.
 - `patches/pad.c`: the controllers' setup, with the lock the controllers' reads take made before the reads start,
   not after: a read between the two waited on the lock for good at boot, and the game with it.
 - `src/aspect_ratio.cpp`: the aspect ratio the picture is drawn at, the window's with Aspect Ratio Expand, for a
@@ -152,7 +166,7 @@ Anything else the games share comes here when a change needs it in more than one
   the wipe module and the end of a frame's last display list for `src/wipe.cpp` (their headers say which functions),
   and where a walk and the map's view take their pace, for `src/board_options.cpp`, and the model walk, its queue and
   the queue's draw for `src/model_ids.cpp` (its header says where), and a minigame's table of effects where it
-  draws one (Mario Party 1's Coin Block Bash).
+  draws one (Mario Party 1's Coin Block Bash), and where a minigame draws parts again (Crane Game's claw shadow).
 
 ## Changing it
 

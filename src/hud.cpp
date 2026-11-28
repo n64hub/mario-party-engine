@@ -3,8 +3,8 @@
 // console, the way the PC ports of N64 games that widen the picture draw a HUD. A picture at least as wide as the
 // screen (a minigame's sky behind its 3D) is drawn stretched over the whole window wherever the game puts it. So is a
 // minigame's corner HUD (each player's name and coins, in Mario Party's Grab Bag, Crane Game and Bash 'n' Cash) at the
-// window's sides. A bar across the screen (Bobsled Run's progress bar between its two views) is stretched over the
-// window with what is on it. Everything else the sprite manager draws (text windows, menus, a minigame's other sprites, its timer)
+// window's sides. A bar across the screen (Bobsled Run's progress bar between its two views, Mario Party 2's Sky
+// Pilots' strip of clouds) is stretched over the window with what is on it. Everything else the sprite manager draws (text windows, menus, a minigame's other sprites, its timer)
 // stays in the 4:3 middle, where RT64 draws a rectangle by default. The letters of the game's big messages (a minigame's winner's name and WINS!)
 // stay there too, but reach out to the window's edges: they come in from five times their size, wider than the
 // screen, and their outer letters were cut off at 4:3's edges.
@@ -46,7 +46,11 @@
 //   4:3's width, so in a wider window it stopped at 4:3's edges between views going on to the window's, its start and
 //   finish with it. A sprite drawn from the bar's pictures under another group is stretched as well. A piece less than
 //   BAR_GAP in from the screen's left edge is drawn from it, wider by as far (Bobsled Run's first tile, 8 in), so the
-//   bar reaches the window's left edge as it reaches its right.
+//   bar reaches the window's left edge as it reaches its right. mp_hud_bar_float does the same for a game whose
+//   sprites' x and y are floats, their centre (Mario Party 2's), with one piece's basic sprite: Sky Pilots' strip of
+//   clouds, ten tiles of one picture from 8 past the screen's left edge to 8 short of its right, its teams' icons
+//   and its finish post over it. There a piece is also drawn to the screen's right edge from less than BAR_GAP short
+//   of it, so the strip reaches the window's right edge as it reaches its left.
 // - mp_hud_group_killed where the sprite manager kills a group (HuSprGrpKill), and mp_hud_reset where it starts again
 //   with no groups (its init, which forgets them without killing them), so a group the board's panels or hands, a
 //   message or a corner HUD used is forgotten when it is freed, before the memory goes to another group.
@@ -65,6 +69,14 @@
 //   are loaded and drawn over those two texels, filtered as one texture. To make room, its commands drop their syncs
 //   (RT64 has no use for them) and each strip's texture image and tile settings that are the same as those already
 //   set. A sprite whose commands would still not fit in their own place is left as it was.
+//   A sprite drawn in strips at another scale than the last time it was drawn is unpaired from the frame before: its
+//   tiles take the other palette (one of colour indices aside, the one format that reads it) until its scale changes
+//   again, so RT64 pairs none of its strips with that frame's. RT64 pairs each strip by itself, a strip drawn at
+//   another scale with one whose texels at its corners are the same within a texel, and the game puts each strip's
+//   edges on whole pixels, so some of a shrinking sprite's strips were paired and others not: Mario Party 3's title
+//   logo, as it bounces after it lands, was drawn in the frames between with every other strip at its size of the
+//   game frame before and the rest at the new one, big and small at once. It is drawn where the game puts it in each
+//   game frame, as it was already in the most of them, where none of its strips paired.
 // - mp_hud_sprite_shift, from a game's hook where the function that draws a sprite reads its x for the matrix it
 //   draws a sprite through (two triangles, which RT64's rectangle alignment doesn't move: Mario Party 3's items in a
 //   panel's item select), how far to move that x: as far in the screen's pixels as the alignment moves the
@@ -82,6 +94,13 @@
 //   (G_EX_ASPECT_ADJUST): RT64 by itself would stretch the rectangles of one that covers the scissor's whole width,
 //   only its middle showing between the black at the window's sides and what stands on it no longer on it (Mario
 //   Party 2's Bumper Balloon Cars' sand under the cars).
+// - mp_hud_picture_start and mp_hud_picture_end, from a game's hooks around a function that draws a picture behind
+//   the scene in its own code, not through its sprite manager, with the address of the display list's pointer it
+//   draws through: in a 4:3 picture its rectangles are kept to 4:3 (G_EX_ASPECT_ADJUST) until its end, as a sprite's
+//   picture is. Mario Party 2's func_8007A7FC_7B3FC draws Balloon Burst's platforms and pumps, gauges and all, as 46
+//   rectangles a few rows each, each covering the scissor's whole width: RT64 by itself stretched them over the
+//   window, the gauges a third wider than the 4:3 middle the scene's 3D (their needles) is drawn in, the needles off
+//   them.
 // - mp_hud_message_group where the game's message module makes the sprite group of a message's letters (Mario Party's
 //   GMesFontCreate), with the group and its members' offset in it: in a picture wider than 4:3 its letters are drawn
 //   out to the window's edges, under a scissor aligned to them (as a panel's), in the 4:3 middle still. The game
@@ -114,6 +133,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 #include "display_list.h"
@@ -160,6 +180,12 @@ namespace {
     constexpr int SPRITE_Y = 0x06;
     constexpr int SPRITE_SCALE_X = 0x14;
     constexpr int SPRITE_DATA = 0x4C;
+    // A sprite of Mario Party 2's sprite manager (mp_hud_bar_float): its x and y, floats at 4 and 8, its centre, its
+    // scale across, a float at 0x18, and its picture's data, a pointer at 0x84.
+    constexpr int FLOAT_SPRITE_X = 0x04;
+    constexpr int FLOAT_SPRITE_Y = 0x08;
+    constexpr int FLOAT_SPRITE_SCALE_X = 0x18;
+    constexpr int FLOAT_SPRITE_DATA = 0x84;
     // How many of a bar's pieces are kept: Bobsled Run's has two, its tiles and its finish post.
     constexpr int BAR_PIECES = 4;
     // How far in from the screen's left edge a piece of the bar may start and still be drawn from it: a tile's width.
@@ -215,6 +241,8 @@ namespace {
     };
     BarPiece bar[BAR_PIECES];
     int32_t bar_top = 0, bar_bottom = 0;
+    // Whether the bar's game's sprites are Mario Party 2's (mp_hud_bar_float), x and y floats from their centre.
+    bool bar_float = false;
     // The messages' groups, 0 for none, and their members' offset in a group.
     gpr messages[MESSAGES];
     int32_t message_members = 0;
@@ -244,11 +272,14 @@ namespace {
     // as wide as the screen, with an aspect of its own until its end.
     float sprite_width = 0.0f;
     bool sprite_picture = false;
+    // Whether a picture a game draws in its own code, from mp_hud_picture_start, is kept to 4:3 until its end.
+    bool own_picture = false;
     // Whether the one being drawn is a piece of the bar, stretched as a picture under a scissor of the whole window.
     bool sprite_bar = false;
-    // A piece of the bar drawn from the screen's left edge: the sprite, 0 for none, and the x and scale it had.
+    // A piece of the bar drawn from the screen's left edge, or to its right (mp_hud_bar_float): the sprite, 0 for none,
+    // and the x (an s16, or a float's word) and scale it had.
     gpr bar_moved = 0;
-    int16_t bar_x = 0;
+    uint32_t bar_x = 0;
     uint32_t bar_scale = 0;
     // Where the next sprite is on the screen, from mp_hud_sprite_at, and whether a game's hook said.
     float sprite_x = 0.0f, sprite_y = 0.0f;
@@ -371,6 +402,18 @@ namespace {
         return 0;
     }
 
+    float word_float(uint32_t word) {
+        float value;
+        std::memcpy(&value, &word, sizeof(value));
+        return value;
+    }
+
+    uint32_t float_word(float value) {
+        uint32_t word;
+        std::memcpy(&word, &value, sizeof(word));
+        return word;
+    }
+
     // How a sprite is drawn with the bar: as a Piece of it (drawn from one of its pieces' pictures), Over it (drawn with
     // its y on the bar's rows), or Off it, every sprite while there is no bar.
     enum class OnBar {
@@ -381,7 +424,7 @@ namespace {
 
     OnBar on_bar(uint8_t* rdram, gpr sprite) {
         bool any = false;
-        gpr data = (gpr)(int32_t)MEM_W(SPRITE_DATA, sprite);
+        gpr data = (gpr)(int32_t)MEM_W(bar_float ? FLOAT_SPRITE_DATA : SPRITE_DATA, sprite);
         for (const BarPiece& piece : bar) {
             if (piece.group == 0) {
                 continue;
@@ -391,8 +434,13 @@ namespace {
                 return OnBar::Piece;
             }
         }
-        int16_t y = (int16_t)MEM_H(SPRITE_Y, sprite);
+        float y = bar_float ? word_float(MEM_W(FLOAT_SPRITE_Y, sprite)) : (float)(int16_t)MEM_H(SPRITE_Y, sprite);
         return (any && (y >= bar_top) && (y < bar_bottom)) ? OnBar::Over : OnBar::Off;
+    }
+
+    // A sprite's x for the bar: its left (an s16) in Mario Party's, its centre (a float) in Mario Party 2's.
+    float bar_sprite_x(uint8_t* rdram, gpr sprite) {
+        return bar_float ? word_float(MEM_W(FLOAT_SPRITE_X, sprite)) : (float)(int16_t)MEM_H(SPRITE_X, sprite);
     }
 
     // How far the picture reaches past 4:3 on each side, in the screen's pixels, rounded up: to the window's edges, or
@@ -532,28 +580,47 @@ extern "C" void mp_hud_side_sprites(uint8_t* rdram, gpr ids, int32_t count, gpr 
 // its y over the bar where its x falls on the stretched bar, at its own size: a minigame's progress bar between its
 // two views (Mario Party's Bobsled Run), its racers' icons going from its start to its finish. Until the pieces'
 // groups are killed.
+namespace {
+    // The bar's piece i, from basic sprite id: its group and its picture's data, a pointer at data in its sprite.
+    void bar_piece(uint8_t* rdram, int32_t i, int16_t id, gpr basic, gpr groups, int32_t members, int32_t data) {
+        if (id < 0) {
+            return;
+        }
+        int16_t index = (int16_t)MEM_H(BASIC_GROUP, basic + id * BASIC_SIZE);
+        if (index < 0) {
+            return;
+        }
+        gpr group = (gpr)(int32_t)MEM_W(index * 4, groups);
+        if ((group == 0) || (MEM_HU(GROUP_COUNT, group) == 0)) {
+            return;
+        }
+        gpr sprite = (gpr)(int32_t)MEM_W(members, group);
+        bar[i].group = group;
+        bar[i].data = (gpr)(int32_t)MEM_W(data, sprite);
+    }
+}
+
 extern "C" void mp_hud_bar(uint8_t* rdram, gpr ids, int32_t count, gpr basic, gpr groups, int32_t members,
                            int32_t top, int32_t bottom) {
     std::memset(bar, 0, sizeof(bar));
     bar_top = top;
     bar_bottom = bottom;
+    bar_float = false;
     for (int32_t i = 0; (i < count) && (i < BAR_PIECES); i++) {
-        int16_t id = (int16_t)MEM_H(i * 2, ids);
-        if (id < 0) {
-            continue;
-        }
-        int16_t index = (int16_t)MEM_H(BASIC_GROUP, basic + id * BASIC_SIZE);
-        if (index < 0) {
-            continue;
-        }
-        gpr group = (gpr)(int32_t)MEM_W(index * 4, groups);
-        if ((group == 0) || (MEM_HU(GROUP_COUNT, group) == 0)) {
-            continue;
-        }
-        gpr sprite = (gpr)(int32_t)MEM_W(members, group);
-        bar[i].group = group;
-        bar[i].data = (gpr)(int32_t)MEM_W(SPRITE_DATA, sprite);
+        bar_piece(rdram, i, (int16_t)MEM_H(i * 2, ids), basic, groups, members, SPRITE_DATA);
     }
+}
+
+// mp_hud_bar_float(id, basic, groups, members, top, bottom): mp_hud_bar for a game whose sprites are Mario Party 2's
+// (x and y floats, the sprite's centre), with one piece, basic sprite id: Sky Pilots' strip of clouds between its two
+// views, ten tiles of one picture, its teams' icons and its finish post over it.
+extern "C" void mp_hud_bar_float(uint8_t* rdram, int32_t id, gpr basic, gpr groups, int32_t members, int32_t top,
+                                 int32_t bottom) {
+    std::memset(bar, 0, sizeof(bar));
+    bar_top = top;
+    bar_bottom = bottom;
+    bar_float = true;
+    bar_piece(rdram, 0, (int16_t)id, basic, groups, members, FLOAT_SPRITE_DATA);
 }
 
 extern "C" void mp_hud_group_killed(uint8_t* rdram, gpr group) {
@@ -625,6 +692,17 @@ extern "C" void mp_hud_sprite_at(uint8_t* rdram, float x, float y) {
 namespace {
     // Where the sprite being drawn starts in the display list, from mp_hud_sprite_start, for join_strips: 0 for none.
     gpr sprite_start = 0;
+    // The sprite being drawn, from mp_hud_sprite_start, for unpair_rescaled.
+    gpr sprite_drawn = 0;
+
+    // A sprite drawn in strips, as unpair_rescaled last saw it: its first strip's steps, and the palette its tiles take.
+    struct Scaled {
+        int32_t dsdx, dtdy;
+        uint32_t palette;
+    };
+
+    // By the sprite's address.
+    std::unordered_map<gpr, Scaled> scaled;
 
     // A display list's command, its two words.
     struct Command {
@@ -705,8 +783,43 @@ namespace {
         return height;
     }
 
+    // gbi.h's G_IM_FMT_CI, the one format whose tile's palette is read.
+    constexpr uint32_t FMT_CI = 2;
+
+    // A sprite drawn in more than one strip at another scale than the last time it was drawn has every tile setting of
+    // its commands (those at start, as commands holds them) not of colour indices given the other palette, which such a
+    // texture doesn't read, and keeps it while its scale stays: see the header.
+    void unpair_rescaled(uint8_t* rdram, gpr start, std::vector<Command>& commands, const std::vector<Strip>& strips) {
+        if ((sprite_drawn == 0) || (strips.size() < 2)) {
+            return;
+        }
+        auto found = scaled.find(sprite_drawn);
+        if (found == scaled.end()) {
+            scaled[sprite_drawn] = {strips[0].dsdx, strips[0].dtdy, 0};
+            return;
+        }
+        Scaled& last = found->second;
+        if ((last.dsdx != strips[0].dsdx) || (last.dtdy != strips[0].dtdy)) {
+            last.dsdx = strips[0].dsdx;
+            last.dtdy = strips[0].dtdy;
+            last.palette ^= 1;
+        }
+        if (last.palette == 0) {
+            return;
+        }
+        for (size_t i = 0; i < commands.size(); i++) {
+            Command& c = commands[i];
+            if (((c.w0 >> 24) != 0xF5) || (((c.w0 >> 21) & 7) == FMT_CI)) {
+                continue;
+            }
+            c.w1 = (c.w1 & ~(0xFu << 20)) | (last.palette << 20);
+            MEM_W(i * 8 + 4, start) = (int32_t)c.w1;
+        }
+    }
+
     // The sprite's commands from start to *gfx with each join of its strips drawn from one texture: see the header.
     // Left as they are where no strips join, or where the commands that would replace them don't fit in their place.
+    // Before that, a sprite whose scale changed is unpaired from the frame before (unpair_rescaled).
     void join_strips(uint8_t* rdram, gpr gfx, gpr start) {
         gpr end = (int32_t)MEM_W(0, gfx);
         if ((start == 0) || (end <= start) || ((end - start) / 8 > SPRITE_COMMANDS)) {
@@ -765,6 +878,8 @@ namespace {
                     break;
             }
         }
+        unpair_rescaled(rdram, start, commands, strips);
+
         // Each strip's join with the next: one texel's height, 0 for none.
         std::vector<int32_t> joins(strips.size(), 0);
         bool any = false;
@@ -859,6 +974,7 @@ static bool reaches_past_4x3(float x, float width) {
 
 extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     sprite_start = (int32_t)MEM_W(0, gfx);
+    sprite_drawn = sprite;
     sprite_reach_pending = false;
     // A picture as wide as the screen: never a panel's, which is a third of it.
     float width = sprite_width;
@@ -885,20 +1001,31 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     OnBar with_bar = (picture_4x3 || (picture_short_half() > 0.0f)) ? OnBar::Off : on_bar(rdram, sprite);
     if (with_bar == OnBar::Piece) {
         sprite_bar = true;
-        // A piece starting near the screen's left edge: from it, as much wider as it was in from it.
-        int16_t x = (int16_t)MEM_H(SPRITE_X, sprite);
-        if ((x > 0) && (x < BAR_GAP) && (width > 0.0f)) {
-            bar_moved = sprite;
-            bar_x = x;
-            bar_scale = MEM_W(SPRITE_SCALE_X, sprite);
-            union {
-                uint32_t u;
-                float f;
-            } scale;
-            scale.u = bar_scale;
-            scale.f *= (x + width) / width;
-            MEM_H(SPRITE_X, sprite) = 0;
-            MEM_W(SPRITE_SCALE_X, sprite) = scale.u;
+        if (bar_float && (width > 0.0f)) {
+            // A piece starting near the screen's left edge or stopping near its right: from or to it, as much wider as
+            // it was in from it (Sky Pilots' last tile, 8 short of the right edge), the same about its centre.
+            float x = word_float(MEM_W(FLOAT_SPRITE_X, sprite));
+            float left = x - width / 2.0f;
+            float right = x + width / 2.0f;
+            float from = ((left > 0.0f) && (left < BAR_GAP)) ? 0.0f : left;
+            float to = ((right < SCREEN_W) && (right > SCREEN_W - BAR_GAP)) ? (float)SCREEN_W : right;
+            if ((from != left) || (to != right)) {
+                bar_moved = sprite;
+                bar_x = MEM_W(FLOAT_SPRITE_X, sprite);
+                bar_scale = MEM_W(FLOAT_SPRITE_SCALE_X, sprite);
+                MEM_W(FLOAT_SPRITE_X, sprite) = float_word((from + to) / 2.0f);
+                MEM_W(FLOAT_SPRITE_SCALE_X, sprite) = float_word(word_float(bar_scale) * (to - from) / width);
+            }
+        } else {
+            // A piece starting near the screen's left edge: from it, as much wider as it was in from it.
+            int16_t x = (int16_t)MEM_H(SPRITE_X, sprite);
+            if ((x > 0) && (x < BAR_GAP) && (width > 0.0f)) {
+                bar_moved = sprite;
+                bar_x = (uint16_t)x;
+                bar_scale = MEM_W(SPRITE_SCALE_X, sprite);
+                MEM_H(SPRITE_X, sprite) = 0;
+                MEM_W(SPRITE_SCALE_X, sprite) = float_word(word_float(bar_scale) * (x + width) / width);
+            }
         }
         GfxCommand commands[6];
         gEXEnable(&commands[0]);
@@ -944,7 +1071,7 @@ extern "C" void mp_hud_sprite_start(uint8_t* rdram, gpr gfx, gpr sprite) {
     // the stretched bar.
     bool over_bar = (panel < 0) && (side == 0) && (with_bar == OnBar::Over);
     if (over_bar) {
-        fraction = std::clamp((int16_t)MEM_H(SPRITE_X, sprite) / (float)SCREEN_W, 0.0f, 1.0f);
+        fraction = std::clamp(bar_sprite_x(rdram, sprite) / (float)SCREEN_W, 0.0f, 1.0f);
     }
     sprite_aligned = !picture_4x3 && (over_bar || (side != 0) ||
                                       ((panel >= 0) && ((panels[panel].side != 0) || (fraction != 0.5f))));
@@ -1072,15 +1199,41 @@ extern "C" float mp_hud_sprite_right(uint8_t* rdram) {
     return (float)(SCREEN_W + sprite_reach * ((sprite_moved != 0) ? 2 : 1));
 }
 
+extern "C" void mp_hud_picture_start(uint8_t* rdram, gpr gfx) {
+    own_picture = picture_4x3;
+    if (own_picture) {
+        GfxCommand commands[2];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_ADJUST);
+        emit(rdram, gfx, commands, 2);
+    }
+}
+
+extern "C" void mp_hud_picture_end(uint8_t* rdram, gpr gfx) {
+    if (own_picture) {
+        own_picture = false;
+        GfxCommand commands[2];
+        gEXEnable(&commands[0]);
+        gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);
+        emit(rdram, gfx, commands, 2);
+    }
+}
+
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
     join_strips(rdram, gfx, sprite_start);
     sprite_start = 0;
+    sprite_drawn = 0;
     sprite_reach_pending = false;
     if (sprite_bar) {
         sprite_bar = false;
         if (bar_moved != 0) {
-            MEM_H(SPRITE_X, bar_moved) = bar_x;
-            MEM_W(SPRITE_SCALE_X, bar_moved) = bar_scale;
+            if (bar_float) {
+                MEM_W(FLOAT_SPRITE_X, bar_moved) = bar_x;
+                MEM_W(FLOAT_SPRITE_SCALE_X, bar_moved) = bar_scale;
+            } else {
+                MEM_H(SPRITE_X, bar_moved) = (int16_t)bar_x;
+                MEM_W(SPRITE_SCALE_X, bar_moved) = bar_scale;
+            }
             bar_moved = 0;
         }
         GfxCommand commands[6];
