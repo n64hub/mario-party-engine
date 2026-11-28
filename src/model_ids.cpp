@@ -237,6 +237,43 @@ namespace {
     CourseMatrix course_before[CAMERAS][COURSE_MATRICES];
     int32_t course_before_count[CAMERAS];
     int32_t course_frame = 0;
+    // The last course part's matrix load (the frame, its camera and the matrix's words) and where the list went on
+    // after its draw, for a part drawn through it (the header says why).
+    struct CourseLoad {
+        bool valid;
+        int32_t frame;
+        uint32_t camera;
+        uint32_t words[16];
+        gpr end;
+    };
+    CourseLoad course_load{};
+    // The part being drawn through that load: its gSPMatrix's place in the list (0 for none), and its ID (0 for a part
+    // whose ID was already drawn in the frame), whether it is interpolated and its camera, for its ID's load after it.
+    gpr through_matrix = 0;
+    uint32_t through_id = 0;
+    bool through_keep = false;
+    uint32_t through_camera = 0;
+    // The IDs of the parts drawn through another's load in the frame, each loaded at the next part's push: its ID,
+    // whether it is interpolated, its camera and its gSPMatrix's two words.
+    struct Unloaded {
+        uint32_t id;
+        bool keep;
+        uint32_t camera;
+        uint32_t word0;
+        uint32_t word1;
+    };
+    constexpr int32_t UNLOADED = 32;
+    Unloaded unloaded[UNLOADED];
+    int32_t unloaded_count = 0;
+    int32_t unloaded_frame = 0;
+    // F3DEX2's gSPMatrix: its command, and a load of the modelview with no push (the bits of its parameters).
+    constexpr uint32_t G_MTX_COMMAND = 0xDA;
+    constexpr uint32_t MTX_MODELVIEW_LOAD = 0x03;
+    // A load of one vertex into the first (gSPVertex, F3DEX2), and gDPNoOp.
+    constexpr uint32_t ONE_VERTEX = 0x01001002;
+    constexpr uint32_t NOOP = 0x00000000;
+    // Commands a part's ID's load takes: its group (two), the matrix, the vertex and the pop; and a gEXEnable first.
+    constexpr int32_t LOAD_BYTES = 5 * 8;
     // Each place in the queue's ID, 0 for an untagged part.
     uint32_t queued[QUEUE];
     // Each place's model, as mp_model_queued gives it, which an untagged part's group is told by.
@@ -769,15 +806,59 @@ static gpr untagged(uint8_t* rdram, gpr at, int32_t camera, gpr model) {
     return at + 24;
 }
 
+// The IDs of the parts drawn through another's load since the last part drawn through its own, each loaded in its
+// group as the part's own gSPMatrix and one vertex, which RT64 makes a transform of the ID, drawing nothing (the header
+// says why). Dropped where the list hasn't room for them, or in another frame.
+static gpr load_unloaded(uint8_t* rdram, gpr at, int32_t frame, gpr list, int32_t list_bytes) {
+    int32_t count = unloaded_count;
+    unloaded_count = 0;
+    if ((count == 0) || (frame != unloaded_frame) || (frame != placed_frame) ||
+        (((int32_t)(list + list_bytes - at) - TAG_BYTES - 8 - count * LOAD_BYTES) < (list_bytes / 4))) {
+        return at;
+    }
+    GfxCommand enable;
+    gEXEnable(&enable);
+    MEM_W(0, at) = enable.values.word0;
+    MEM_W(4, at) = enable.values.word1;
+    at += 8;
+    for (int32_t i = 0; i < count; i++) {
+        const Unloaded& u = unloaded[i];
+        if (placed_count < PLACED) {
+            Placed& p = placed[placed_count++];
+            p = Placed{};
+            p.id = u.id;
+            p.group = at;
+            p.keep = u.keep;
+            p.course = true;
+        }
+        group(rdram, at, u.id, u.keep, turning_camera[u.camera]);
+        at += 16;
+        GfxCommand pop;
+        gEXPopMatrixGroup(&pop, MODELVIEW);
+        uint32_t words[6] = { u.word0, u.word1, ONE_VERTEX, u.word1, pop.values.word0, pop.values.word1 };
+        for (int w = 0; w < 6; w++) {
+            MEM_W(w * 4, at) = words[w];
+        }
+        at += 24;
+    }
+    return at;
+}
+
 extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                               int32_t list_bytes) {
     pushed = false;
     part_start = at;
+    through_matrix = 0;
+    bool loaded_before = course_load.valid;
+    course_load.valid = false;
     if ((place < 0) || (place >= QUEUE)) {
         return at;
     }
     if (((int32_t)(list + list_bytes - at) - TAG_BYTES) < (list_bytes / 4)) {
         return at;
+    }
+    if (!is_course(queued[place])) {
+        at = load_unloaded(rdram, at, frame, list, list_bytes);
     }
     if (queued[place] == 0) {
         return untagged(rdram, at, drawing_camera, queued_model[place]);
@@ -852,12 +933,41 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         }
         uint32_t number = (m < course_matrix_count[camera]) ? course_matrices[camera][m].number : COURSE_PAST;
         id |= number << COURSE_NUMBER_SHIFT;
+        // A part new to the frame, or one whose ID was already drawn in it, right after a course part of its camera
+        // drawn through the same matrix is drawn through that part's load (the header says why).
         auto last = seen.find(id);
-        if ((last != seen.end()) && (last->second.frame == frame)) {
+        bool again = (last != seen.end()) && (last->second.frame == frame);
+        bool before = (last != seen.end()) && (last->second.frame == frame - 1);
+        if (loaded_before && (course_load.frame == frame) && (course_load.camera == camera) &&
+            (course_load.end == at) && (std::memcmp(course_load.words, words, sizeof(words)) == 0) &&
+            (again || !before)) {
+            through_matrix = at;
+            through_id = 0;
+            if (!again) {
+                Pose now = pose(rdram, mtx);
+                float origin[3];
+                for (int c = 0; c < 3; c++) {
+                    origin[c] = element(rdram, mtx, 12 + c);
+                }
+                bool paired = false;
+                bool turned = false;
+                bool went_on = false;
+                bool moved = false;
+                through_id = id;
+                through_keep = interpolated(id, now, origin, frame, paired, turned, went_on, moved) && !cut[camera];
+                through_camera = camera;
+            }
+            course_load.valid = true;
+            return at;
+        }
+        at = load_unloaded(rdram, at, frame, list, list_bytes);
+        if (again) {
             // No group of its camera and model: Bobsled Run draws both views with one camera, each through its own
             // matrix, so that group would pair a part across the views.
             return untagged(rdram, at, (int32_t)camera, 0);
         }
+        course_load = CourseLoad{ true, frame, camera, {}, 0 };
+        std::memcpy(course_load.words, words, sizeof(words));
     }
     Pose now = pose(rdram, mtx);
     float origin[3];
@@ -1039,18 +1149,42 @@ namespace {
 extern "C" void mp_model_pop(uint8_t* rdram, gpr gfx) {
     boo_writes_depth(rdram, part_start, MEM_W(0, gfx));
     part_start = 0;
-    if (!pushed) {
-        return;
+    // A part drawn through the last course part's load: its own gSPMatrix taken out, and loaded with its ID at the next
+    // part's push (load_unloaded), or the part left to RT64 where the game's command isn't that load.
+    if (through_matrix != 0) {
+        uint32_t word0 = MEM_W(0, through_matrix);
+        uint32_t word1 = MEM_W(4, through_matrix);
+        if (((word0 >> 24) == G_MTX_COMMAND) && ((word0 & 0x07) == MTX_MODELVIEW_LOAD)) {
+            MEM_W(0, through_matrix) = NOOP;
+            MEM_W(4, through_matrix) = NOOP;
+            if (through_id != 0) {
+                if (unloaded_frame != course_load.frame) {
+                    unloaded_frame = course_load.frame;
+                    unloaded_count = 0;
+                }
+                if (unloaded_count < UNLOADED) {
+                    unloaded[unloaded_count++] = Unloaded{ through_id, through_keep, through_camera, word0, word1 };
+                }
+            }
+        }
+        else {
+            course_load.valid = false;
+        }
+        through_matrix = 0;
     }
-    GfxCommand command;
-    gEXPopMatrixGroup(&command, MODELVIEW);
-    mp_display_list::emit(rdram, gfx, &command, 1);
-    pushed = false;
+    if (pushed) {
+        GfxCommand command;
+        gEXPopMatrixGroup(&command, MODELVIEW);
+        mp_display_list::emit(rdram, gfx, &command, 1);
+        pushed = false;
+    }
+    course_load.end = (int32_t)MEM_W(0, gfx);
 }
 
 extern "C" gpr mp_model_again(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int32_t frame, gpr list,
                                int32_t list_bytes) {
     again_pushed = false;
+    course_load.valid = false;
     if ((place < 0) || (place >= QUEUE) || (queued[place] == 0) || (frame != placed_frame)) {
         return at;
     }
@@ -1134,6 +1268,7 @@ namespace {
 
 extern "C" gpr mp_effect_push(uint8_t* rdram, gpr at, uint32_t key, gpr place, float far, int32_t frame) {
     effect_pushed = false;
+    course_load.valid = false;
     if (key >= EFFECT_KEYS) {
         return at;
     }
