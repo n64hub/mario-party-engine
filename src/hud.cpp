@@ -772,13 +772,17 @@ namespace {
     // the strips beside it are edged on lines' tops where the join is; see the header): 0 where it doesn't. A texel's
     // height needn't be whole lines (Mario Party's Cast Aways draws its sky 13/6 times as tall, 2.17 of them, so 2):
     // b goes on from a where a's step, which the game rounds to an s5.10, takes it to b's first row within as far as
-    // that rounding can over a's height.
+    // that rounding can over a's height. At such a magnification only a join on a line's top is drawn: one part way
+    // down a line (a sprite growing through it) would start each rectangle's rows from the line above.
     int32_t join_height(const Strip& a, const Strip& b) {
         if ((a.tile != b.tile) || (a.xl != b.xl) || (a.xh != b.xh) || (a.yh != b.yl) || (a.s != b.s) ||
             (a.dsdx != b.dsdx) || (a.dtdy != b.dtdy) || (a.dtdy <= 0) || (a.dtdy >= STEP_ONE)) {
             return 0;
         }
         int32_t height = 4 * ((STEP_ONE + a.dtdy / 2) / a.dtdy);
+        if (((4 * STEP_ONE) % a.dtdy != 0) && (b.yl % 4 != 0)) {
+            return 0;
+        }
         // How far a's texture coordinate goes down it, in s5.10 by quarter pixels: in s10.5, 128 times less.
         int32_t drawn = (a.yh - a.yl) * a.dtdy;
         if (((a.yh - a.yl) <= 2 * height) || ((b.yh - b.yl) <= 2 * height) ||
