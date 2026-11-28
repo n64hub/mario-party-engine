@@ -79,6 +79,12 @@
 // front's turn plus half a turn; the dial was drawn at its own turn and the front between its two, 12 degrees apart,
 // and the frame between showed a second outline and the dial's pink rim.
 //
+// But a new part doesn't so hold back a part at its place that didn't turn since the frame before (paired, interpolated):
+// that part has no turn of its own to come apart from the new one's, and drawn at its own matrix it is drawn where
+// the camera is going while the rest is drawn partway. Mario Party 1's Mario Bandstand starts each part it sends up
+// from a player's riser at the riser, while the camera backs away 11 units a frame; the riser drawn at its own matrix
+// stood up to 11 units behind the floor around it, and the floor showed through it in most of the frames between.
+//
 // Nor is any part where its camera cut to another shot. A part's matrix holds the camera's view (the engine multiplies
 // it in as it walks the model), so a part interpolated across a cut was drawn with the camera partway from one shot to
 // the other, the picture swept for a frame: Mario Party 2's opening cuts from the side of the warp pipe to down its
@@ -213,7 +219,9 @@ namespace {
     constexpr float COPY_NEW = 0.25f;
 
     // The frame's tags so far: where each part's origin is in its camera's view, where its group command is in the
-    // list, whether it is drawn at its own matrix, and whether it turned more than 75 degrees, going on with its turn.
+    // list, whether it is drawn at its own matrix, whether it turned more than 75 degrees, going on with its turn,
+    // whether it is new (drawn at its own matrix as it had no pair the frame before), and whether it is paired and
+    // interpolated and didn't turn since the frame before.
     struct Placed {
         uint32_t id;
         float origin[3];
@@ -221,6 +229,8 @@ namespace {
         bool own;
         bool keep;
         bool went_on;
+        bool fresh;
+        bool still;
     };
     constexpr size_t PLACED = 512;
     Placed placed[PLACED];
@@ -647,6 +657,8 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     }
     here.own = (now.sign != 0) && (!keep || !paired);
     here.went_on = went_on && keep;
+    here.fresh = here.own && !paired;
+    here.still = keep && paired && !turned;
     // A part turned more than 75 degrees, going on with its turn, at the place of another model's part, is drawn at
     // its own matrix after all (the header says why), and so are the parts at its place, below.
     for (size_t i = 0; i < placed_count; i++) {
@@ -669,6 +681,10 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
         Placed& other = placed[i];
         if ((camera_of(other.id) != camera) || (other.own == here.own) ||
             !same_place(other.origin, here.origin)) {
+            continue;
+        }
+        // A new part doesn't hold back a part at its place that didn't turn (the header says why).
+        if ((here.fresh && other.still) || (other.fresh && here.still)) {
             continue;
         }
         if (here.own) {
