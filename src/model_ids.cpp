@@ -108,7 +108,10 @@
 // commands a part: a part whose tag would leave less than a quarter of the list after it is left untagged, for RT64 to
 // pair as before, so the tags never take the room the game draws the rest of its frame in.
 
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 
@@ -231,6 +234,17 @@ namespace {
     int32_t paired_parts[CAMERAS];
     int32_t turned_parts[CAMERAS];
     bool turning_camera[CAMERAS];
+    int32_t moved_parts[CAMERAS];
+    bool moving_camera[CAMERAS];
+    // How far a part moved in a frame, at least, for RT64 to put it at its new place (with 10 times its step before).
+    constexpr float MOVING = 5.0f;
+    // TEST ONLY (card 17955509926480000): MP_MOVE_RULE=0 turns the moving rule off, MP_MODEL_LOG=1 logs each frame.
+    int test_rule = -1;
+    int test_log = -1;
+    int32_t snap_parts[CAMERAS];
+    int32_t own_parts[CAMERAS];
+    int32_t keep_parts[CAMERAS];
+    float snap_steps[CAMERAS][4];
 
     // Whether two origins are one place: within a hundredth of their distance from the eye.
     bool same_place(const float a[3], const float b[3]) {
@@ -478,7 +492,7 @@ namespace {
     // the frame before goes in turned, and whether it turned more than 75 degrees, going on with its turn, in went_on.
     // IDs not drawn for a second are forgotten.
     bool interpolated(uint32_t id, const Pose& now, const float origin[3], int32_t frame, bool& paired, bool& turned,
-                      bool& went_on) {
+                      bool& went_on, float& step, float& prev_step) {
         if (frame != seen_frame) {
             if (seen.size() > SLOTS * 64) {
                 for (auto it = seen.begin(); it != seen.end();) {
@@ -491,6 +505,8 @@ namespace {
         paired = (it != seen.end()) && (it->second.frame == frame - 1);
         turned = paired && turning(it->second.pose, now);
         went_on = false;
+        step = 0.0f;
+        prev_step = -1.0f;
         Seen next{ frame, now, { 0.0f, 0.0f, 0.0f }, { origin[0], origin[1], origin[2] }, 0, { 0.0f, 0.0f, 0.0f } };
         next.before_frame = (it != seen.end()) ? it->second.frame : (frame - 2);
         bool far = false;
@@ -501,6 +517,14 @@ namespace {
             }
         }
         if (paired) {
+            float d = 0.0f;
+            float e = 0.0f;
+            for (int c = 0; c < 3; c++) {
+                d += (origin[c] - it->second.origin[c]) * (origin[c] - it->second.origin[c]);
+                e += (it->second.origin[c] - it->second.before[c]) * (it->second.origin[c] - it->second.before[c]);
+            }
+            step = std::sqrt(d);
+            prev_step = (it->second.before_frame == frame - 2) ? std::sqrt(e) : -1.0f;
             blinked = (it->second.before_frame == frame - 2) && blink_far(it->second.origin, origin) &&
                       same_place(it->second.before, origin);
             float axis[3];
@@ -627,17 +651,47 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     bool paired = false;
     bool turned = false;
     bool went_on = false;
-    bool keep = interpolated(id, now, origin, frame, paired, turned, went_on) && !cut[camera];
+    float step = 0.0f;
+    float prev_step = -1.0f;
+    bool keep = interpolated(id, now, origin, frame, paired, turned, went_on, step, prev_step) && !cut[camera];
+    if (test_rule < 0) {
+        const char* r = getenv("MP_MOVE_RULE");
+        const char* l = getenv("MP_MODEL_LOG");
+        test_rule = (r && r[0] == '0') ? 0 : 1;
+        test_log = (l && l[0] == '1') ? 1 : 0;
+        fprintf(stderr, "model_ids test: rule %d log %d\n", test_rule, test_log);
+    }
 
     // A part drawn at its own matrix draws the parts at its place at theirs too (the header says why). A part that
     // collapses draws nothing, so it holds nobody back: Mario Party 3's dial keeps one part at 0 every frame.
     if (frame != placed_frame) {
+        if (test_log == 1) {
+            long long ms = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            for (int c = 0; c < CAMERAS; c++) {
+                if ((keep_parts[c] + own_parts[c]) == 0) {
+                    continue;
+                }
+                fprintf(stderr, "mlog %lld f %d cam %d keep %d own %d paired %d turned %d moved %d snap %d T%d M%d s %.1f/%.1f %.1f/%.1f\n",
+                        ms, placed_frame, c, keep_parts[c], own_parts[c], paired_parts[c], turned_parts[c],
+                        moved_parts[c], snap_parts[c], turning_camera[c] ? 1 : 0, moving_camera[c] ? 1 : 0,
+                        snap_steps[c][0], snap_steps[c][1], snap_steps[c][2], snap_steps[c][3]);
+            }
+        }
         placed_count = 0;
         placed_frame = frame;
         for (int c = 0; c < CAMERAS; c++) {
             paired_parts[c] = 0;
             turned_parts[c] = 0;
             turning_camera[c] = false;
+            moved_parts[c] = 0;
+            moving_camera[c] = false;
+            snap_parts[c] = 0;
+            own_parts[c] = 0;
+            keep_parts[c] = 0;
+            for (int k = 0; k < 4; k++) {
+                snap_steps[c][k] = 0.0f;
+            }
         }
     }
     Placed here;
@@ -685,19 +739,31 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     // Whether the camera turned, by most of its parts (the header says why), its parts tagged before this one
     // rewritten where that changed.
     if (keep && paired) {
+        bool was = turning_camera[camera] || moving_camera[camera];
         paired_parts[camera]++;
         turned_parts[camera] += turned ? 1 : 0;
-        bool turning_now = (turned_parts[camera] * 2) > paired_parts[camera];
-        if (turning_now != turning_camera[camera]) {
-            turning_camera[camera] = turning_now;
+        moved_parts[camera] += (step >= MOVING) ? 1 : 0;
+        if ((step >= MOVING) && (prev_step >= 0.0f) && (step >= prev_step * 10.0f)) {
+            if (snap_parts[camera] < 2) {
+                snap_steps[camera][snap_parts[camera] * 2] = step;
+                snap_steps[camera][snap_parts[camera] * 2 + 1] = prev_step;
+            }
+            snap_parts[camera]++;
+        }
+        turning_camera[camera] = (turned_parts[camera] * 2) > paired_parts[camera];
+        moving_camera[camera] = (test_rule == 1) && ((moved_parts[camera] * 2) > paired_parts[camera]);
+        bool now_whole = turning_camera[camera] || moving_camera[camera];
+        if (now_whole != was) {
             for (size_t i = 0; i < placed_count; i++) {
                 Placed& other = placed[i];
                 if ((camera_of(other.id) == camera) && other.keep) {
-                    group(rdram, other.group, other.id, true, turning_now);
+                    group(rdram, other.group, other.id, true, now_whole);
                 }
             }
         }
     }
+    keep_parts[camera] += keep ? 1 : 0;
+    own_parts[camera] += here.own ? 1 : 0;
 
     GfxCommand enable;
     gEXEnable(&enable);
@@ -706,7 +772,7 @@ extern "C" gpr mp_model_push(uint8_t* rdram, gpr at, int32_t place, gpr mtx, int
     at += 8;
     here.group = at;
     here.keep = keep;
-    group(rdram, at, id, keep, turning_camera[camera]);
+    group(rdram, at, id, keep, turning_camera[camera] || moving_camera[camera]);
     at += 16;
     if (placed_count < PLACED) {
         placed[placed_count++] = here;
