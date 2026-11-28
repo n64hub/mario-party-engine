@@ -68,6 +68,16 @@
 // the square) palette 0 and 1 in turn, which a texture of intensities doesn't read: no two game frames running draw the
 // same tile, and RT64 draws the shape where the game put it, as it does the colour.
 //
+// Mario Party 3's star grid (its wipe type 2) is no shape in a square: it covers the screen in a grid of stars in two
+// passes, each six square rings of 32 pixels round the screen's centre, every ring more opaque than the one inside it,
+// so the screen closes from its edges in. The star pass draws each ring as texture rectangles of a star mask, which
+// repeats every 32 pixels, the colour pass the same rings as fill rectangles of the wipe's colour, rising later. Its
+// last ring is the columns at 4:3's edges, so past them the window showed the scene with no stars over it, only
+// mp_wipe_sides' flat colour. mp_wipe_star_stars and mp_wipe_star_colour, where each pass ends, draw the rings on
+// past 4:3 as far as the picture reaches, in the alpha the game's numbers give each ring further out, with the
+// stars of the mask's texture where the game's grid puts them, so the grid covers the whole window and closes from
+// its edges as it does in 4:3.
+//
 // A 4:3 picture's sides are black whatever its scene draws: mp_wipe_picture_sides, where a game ends the last display
 // list of its frame (after its wipe and its text), given the list's next command, fills the window black from past its
 // left edge to 4:3's and from 4:3's right edge to past its right edge, two fill rectangles of the window's sides alone
@@ -92,6 +102,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 #include "display_list.h"
 
@@ -285,6 +296,123 @@ namespace {
         gEXPopScissor(&commands[count + 2]);
         emit(rdram, gfx, commands, count + 3);
     }
+
+    // gbi.h's gDPSetPrimColor, whose alpha a ring of the star grid's wipe is drawn with.
+    constexpr uint32_t G_SETPRIMCOLOR = 0xFA;
+    // The star grid's rings: ring k is the square from 4:3's (144 - 32k, 104 - 32k) to (176 + 32k, 136 + 32k) less
+    // ring k - 1's, so from ring 4 out it is two columns of the screen's whole height, the left one from 144 - 32k to
+    // 176 - 32k. The game draws six; the sixth, ring 5, is the columns at 4:3's edges, of which it draws the 16 pixels
+    // inside the screen.
+    constexpr int32_t RING = 32;
+    constexpr int32_t RING_LEFT = 144;
+    constexpr int32_t RING_TOP = 104;
+    constexpr int GAME_RINGS = 6;
+    // The wipe's progress (0 to 1) as its star pass ended, for its colour pass.
+    float star_progress = 0.0f;
+
+    // The alpha of ring k of a pass whose alpha is progress * scale * 255 - less for ring 0 and step more for each ring
+    // out, at most 255, as the game counts it in floats; -1 for a ring the game doesn't draw, which it skips while the
+    // ring after it would still be clear.
+    int32_t ring_alpha(float progress, float scale, float less, float step, int k) {
+        float alpha = progress * scale;
+        alpha = alpha * 255.0f;
+        alpha = alpha - less;
+        alpha = std::min(alpha, 255.0f);
+        for (int i = 0; i < k; i++) {
+            alpha = std::min(alpha + step, 255.0f);
+        }
+        if (std::min(alpha + step, 255.0f) <= 0.0f) {
+            return -1;
+        }
+        return (int32_t)std::max(alpha, 0.0f);
+    }
+
+    // The star grid's rings past 4:3: ring 5's columns where they leave the screen, then rings 6, 7 and on, as far as
+    // the picture reaches, each a column each side of the screen's whole height in its own alpha (ring_alpha with the
+    // pass's numbers), its star mask's texture rectangle in the star pass (stars), a fill rectangle of the wipe's
+    // colour in the colour pass. The rest of the pass's state (the mask's tile, the combine, the colour) is the game's,
+    // as its last ring left it.
+    void star_rings(uint8_t* rdram, gpr gfx, bool stars, float progress, float scale, float less, float step) {
+        if (picture_is_4x3()) {
+            return;
+        }
+        // The colour of the game's last ring, its prim colour, found back from *gfx.
+        gpr at = (int32_t)MEM_W(0, gfx);
+        uint32_t prim1 = 0;
+        bool found = false;
+        for (int i = 1; (i <= LOOK_BACK) && !found; i++) {
+            gpr command = at - 8 * i;
+            if (((uint32_t)MEM_W(0, command) >> 24) == G_SETPRIMCOLOR) {
+                prim1 = (uint32_t)MEM_W(4, command);
+                found = true;
+            }
+        }
+        if (!found) {
+            return;
+        }
+
+        int32_t reach = (int32_t)std::ceil(picture_half()) + 1;
+        int32_t far_left = HALF - reach;
+        int32_t far_right = HALF + reach;
+        std::vector<GfxCommand> commands(4);
+        gEXEnable(&commands[0]);
+        push_wide_scissor(&commands[1]);
+        for (int k = GAME_RINGS - 1; RING_LEFT + RING - RING * k > far_left; k++) {
+            int32_t alpha = ring_alpha(progress, scale, less, step, k);
+            if (alpha < 0) {
+                continue;
+            }
+            GfxCommand colour;
+            colour.values.word0 = G_SETPRIMCOLOR << 24;
+            colour.values.word1 = (prim1 & 0xFFFFFF00u) | (uint32_t)alpha;
+            commands.push_back(colour);
+            // The ring's left column, from far_left at most to 4:3's left edge at most, and its right one the same
+            // way round.
+            int32_t ring_left = RING_LEFT - RING * k;
+            int32_t ring_right = RING_LEFT + RING * k;
+            const int32_t columns[2][3] = {
+                { std::max(ring_left, far_left), std::min(ring_left + RING, 0), ring_left },
+                { std::max(ring_right, SCREEN_W), std::min(ring_right + RING, far_right), ring_right },
+            };
+            for (const auto& column : columns) {
+                int32_t left = column[0];
+                int32_t width = column[1] - left;
+                if (width <= 0) {
+                    continue;
+                }
+                size_t n = commands.size();
+                commands.resize(n + (stars ? 5 : 3));
+                // From 0 to its width, moved to left: with no origin, as the game's own rings are placed, so the
+                // column meets them on the same pixel. An edge with an origin is snapped to the picture's grid of
+                // whole pixels, a pixel short of where the game's edge is at some window sizes (1280x720 put a
+                // line of the scene between ring 5's two halves and doubled its colour on the right).
+                gEXSetRectAlign(&commands[n], G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, left * 4, 0, left * 4, 0);
+                if (!stars) {
+                    fill(&commands[n + 2], 0, width);
+                    continue;
+                }
+                // The mask's texture as the game places it: its texel 0 at the ring's top left (its column's top
+                // RING_TOP - RING * k), so the stars go on in the game's grid. Kept within S10.5 (a texture's
+                // repeat is a power of two of 256 texels at most).
+                int32_t s = (left - column[2]) & 0xFF;
+                int32_t t = (RING * k - RING_TOP) & 0xFF;
+                commands[n + 2].values.word0 = (G_TEXRECT << 24) | ((uint32_t)(width * 4) << 12) | (SCREEN_H * 4);
+                commands[n + 2].values.word1 = 0;
+                commands[n + 3].values.word0 = G_RDPHALF_1 << 24;
+                commands[n + 3].values.word1 = ((uint32_t)(s * 32) << 16) | (uint32_t)(t * 32);
+                commands[n + 4].values.word0 = G_RDPHALF_2 << 24;
+                commands[n + 4].values.word1 = 0x04000400;
+            }
+        }
+        size_t n = commands.size();
+        commands.resize(n + 4);
+        rect_own(&commands[n]);
+        gEXPopScissor(&commands[n + 2]);
+        // The game's last colour back.
+        commands[n + 3].values.word0 = G_SETPRIMCOLOR << 24;
+        commands[n + 3].values.word1 = prim1;
+        emit(rdram, gfx, commands.data(), (int)commands.size());
+    }
 }
 
 extern "C" void mp_wipe_fill_start(uint8_t* rdram, gpr gfx) {
@@ -353,6 +481,20 @@ extern "C" void mp_wipe_sides(uint8_t* rdram, gpr gfx) {
 extern "C" void mp_wipe_square_sides(uint8_t* rdram, gpr gfx, gpr left, gpr right) {
     unpair_shape(rdram, gfx);
     sides(rdram, gfx, (int16_t)left, (int16_t)right);
+}
+
+// Mario Party 3's star grid (its wipe type 2, func_800641C8_main(gfx, progress)): mp_wipe_star_stars where its star
+// pass ends, given the progress (a float in a general register), and mp_wipe_star_colour where its colour pass ends.
+// The star pass's ring k is drawn in progress * 1.2 * 255 - 51 + 8k, the colour pass's in progress * 1.4 * 255 - 102
+// + 16k.
+extern "C" void mp_wipe_star_stars(uint8_t* rdram, gpr gfx, gpr progress) {
+    uint32_t bits = (uint32_t)progress;
+    std::memcpy(&star_progress, &bits, sizeof(star_progress));
+    star_rings(rdram, gfx, true, star_progress, 1.2f, 51.0f, 8.0f);
+}
+
+extern "C" void mp_wipe_star_colour(uint8_t* rdram, gpr gfx) {
+    star_rings(rdram, gfx, false, star_progress, 1.4f, 102.0f, 16.0f);
 }
 
 extern "C" gpr mp_wipe_shape_scale(uint8_t* rdram, gpr scale) {
