@@ -30,7 +30,12 @@
 //   were squeezed into 4:3 under the wipe for it. The game's patch draws the triangle again after that list
 //   (camera_view_span_after), and after the clip ratio its code sets in the main list before it draws the characters
 //   (camera_view_span). A screen split between players (a minigame's halves and quarters, at 160) keeps the game's,
-//   and so does every camera while the picture is 4:3
+//   unless the game's patch widens it (camera_view_split_scissor): each piece's outer edge goes to the window's side and
+//   its edge at 160 to the window's middle, its 3D on a viewport the window's width, from its centre (gEXViewport), with
+//   the piece's own place in the screen in its projection, as wide as the window over the screen, so a piece drawn
+//   from one of the screen's edges and short of the other, as Desert Dash's halves slide in from the whole screen, is
+//   drawn where its scissor is at every step. Mario Party's Desert Dash started its race at 16:9 and snapped to 4:3
+//   once the halves were drawn. Every camera keeps the game's while the picture is 4:3
 //   (board_back.c: a board's opening scene, whose map is no wider than 4:3, or a scene the game draws at 4:3), so that
 //   its 3D, the scene's host and the players among them, keeps inside 4:3 with its background, not out over the black
 //   at the window's sides. RT64 fits a pass to 4:3 (each scissor's edges and each 3D view's viewport) only when the

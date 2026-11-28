@@ -31,7 +31,8 @@ void camera_view_span_after(Gfx** gfx, Gfx* list);
 // widened is CAMERA_VIEW_SPLIT for a piece of a split screen widened with camera_view_split_scissor.
 void camera_view_projection(Gfx** gfx, s32 camera, Vp* viewport, u16 persp_norm, Mtx* projection, s32 widened);
 // Whether a camera with this scissor is a half or a quarter of a screen split between players (an edge on the screen's
-// middle) that can be drawn out to the window's side, while the picture is wider than 4:3. A game whose patch passes
+// middle, or one on a screen's edge and the other short of the far one, as a half sliding in) that can be drawn out to
+// the window's side, while the picture is wider than 4:3. A game whose patch passes
 // CAMERA_VIEW_SPLIT to camera_view_projection for it, and sets its scissor with camera_view_split_scissor, has it
 // widened; one that doesn't keeps the piece at 4:3, as camera_view_scissor does.
 s32 camera_view_split(s32 left, s32 right);

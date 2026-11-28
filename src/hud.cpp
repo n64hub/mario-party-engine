@@ -101,6 +101,14 @@
 //   rectangles a few rows each, each covering the scissor's whole width: RT64 by itself stretched them over the
 //   window, the gauges a third wider than the 4:3 middle the scene's 3D (their needles) is drawn in, the needles off
 //   them.
+//   mp_hud_list_picture_start and mp_hud_list_picture_end do the same for a picture a game writes into a list of its
+//   own that it calls from the scene, ended by its own gSPEndDisplayList and written from the list's start again each
+//   frame, and stretch it over the window in a picture wider than 4:3, as a sprite's: from a hook at the function's
+//   start with the address of the list's pointer, and one where its gSPEndDisplayList is written with that command's
+//   address and the list's size. The list is moved two commands on to make room for the aspect's at its start, with
+//   AUTO put back before its end, only while it still fits. Mario Party's Desert Dash draws each player's sky as
+//   rectangles in such a list (func_800FB750_DesertDash): each half of the screen widened to the window's sides
+//   (patches/camera_view.c's split screen), its sky stayed in the 4:3 middle, the 3D on beside it.
 // - mp_hud_message_group where the game's message module makes the sprite group of a message's letters (Mario Party's
 //   GMesFontCreate), with the group and its members' offset in it: in a picture wider than 4:3 its letters are drawn
 //   out to the window's edges, under a scissor aligned to them (as a panel's), in the 4:3 middle still. The game
@@ -1217,6 +1225,48 @@ extern "C" void mp_hud_picture_end(uint8_t* rdram, gpr gfx) {
         gEXSetRectAspect(&commands[1], G_EX_ASPECT_AUTO);
         emit(rdram, gfx, commands, 2);
     }
+}
+
+namespace {
+    // The address of the list's pointer mp_hud_list_picture_start was given.
+    gpr list_picture = 0;
+}
+
+extern "C" void mp_hud_list_picture_start(uint8_t* rdram, gpr list) {
+    list_picture = list;
+}
+
+extern "C" void mp_hud_list_picture_end(uint8_t* rdram, gpr end, uint32_t size) {
+    if (list_picture == 0) {
+        return;
+    }
+    gpr start = (int32_t)MEM_W(0, list_picture);
+    list_picture = 0;
+    constexpr int32_t command = 8;
+    // The list's commands, the two of the aspect at its start, AUTO and the gSPEndDisplayList.
+    if ((end < start) || ((uint32_t)(end - start) + 4 * command > size)) {
+        return;
+    }
+    int32_t end_word0 = MEM_W(0, end);
+    int32_t end_word1 = MEM_W(4, end);
+    for (gpr at = end; at > start;) {
+        at -= command;
+        MEM_W(2 * command, at) = MEM_W(0, at);
+        MEM_W(2 * command + 4, at) = MEM_W(4, at);
+    }
+    GfxCommand commands[3];
+    gEXEnable(&commands[0]);
+    gEXSetRectAspect(&commands[1], picture_4x3 ? G_EX_ASPECT_ADJUST : G_EX_ASPECT_STRETCH);
+    gEXSetRectAspect(&commands[2], G_EX_ASPECT_AUTO);
+    for (int i = 0; i < 2; i++) {
+        MEM_W(i * command, start) = commands[i].values.word0;
+        MEM_W(i * command + 4, start) = commands[i].values.word1;
+    }
+    gpr moved_end = end + 2 * command;
+    MEM_W(0, moved_end) = commands[2].values.word0;
+    MEM_W(4, moved_end) = commands[2].values.word1;
+    MEM_W(command, moved_end) = end_word0;
+    MEM_W(command + 4, moved_end) = end_word1;
 }
 
 extern "C" void mp_hud_sprite_end(uint8_t* rdram, gpr gfx) {
